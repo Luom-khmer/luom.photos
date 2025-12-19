@@ -5,7 +5,7 @@ import { CreateAlbumForm } from './components/CreateAlbumForm';
 import { AlbumView } from './components/AlbumView';
 import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 const App: React.FC = () => {
   const [albumId, setAlbumId] = useState<string | null>(null);
@@ -47,22 +47,21 @@ const App: React.FC = () => {
     window.addEventListener('popstate', handleUrlChange);
     window.addEventListener('hashchange', handleUrlChange);
 
-    // 2. Firebase Auth Listener with Auto-Register & Ban Check
+    // 2. Firebase Auth Listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user && user.email) {
-        // CẬP NHẬT UI NGAY LẬP TỨC
+        // Cập nhật UI ngay lập tức
         setCurrentUser(user);
 
         const email = user.email;
         const userDocRef = doc(db, 'allowed_users', email);
 
-        // XỬ LÝ DATABASE (QUAN TRỌNG: Dùng setDoc merge để đảm bảo luôn lưu)
         try {
-            // 1. Kiểm tra trạng thái Ban trước
+            // Lấy dữ liệu hiện tại để kiểm tra trạng thái BAN
             const userDocSnapshot = await getDoc(userDocRef);
             const userData = userDocSnapshot.exists() ? userDocSnapshot.data() : null;
 
-            // Nếu bị ban và không phải Admin -> Logout và ngừng xử lý
+            // Nếu bị ban và không phải Admin -> Logout
             if (!ADMIN_EMAILS.includes(email) && userData && userData.banned === true) {
                 await logoutUser();
                 setCurrentUser(null);
@@ -70,26 +69,28 @@ const App: React.FC = () => {
                 return;
             }
 
-            // 2. LƯU THÔNG TIN USER (Persistence)
-            // Sử dụng setDoc với { merge: true } để:
-            // - Tạo document mới nếu chưa có (lưu mãi mãi)
-            // - Cập nhật lastLogin nếu đã có
-            // - Không ghi đè trường 'banned' nếu nó đang tồn tại
-            await setDoc(userDocRef, { 
-                email: email,
+            // --- QUAN TRỌNG: LUÔN LƯU USER VÀO DB KHI ĐĂNG NHẬP ---
+            // Sử dụng setDoc với merge: true để đảm bảo:
+            // 1. Nếu chưa có -> Tạo mới.
+            // 2. Nếu đã có -> Cập nhật lastLogin.
+            const payload: any = { 
+                email: email, // Luôn ghi đè email để chắc chắn trường này tồn tại
                 lastLogin: new Date(),
                 photoURL: user.photoURL || '',
                 displayName: user.displayName || '',
-                // Chúng ta không set 'banned' ở đây để tránh bỏ chặn nhầm
-            }, { merge: true });
+                // Đảm bảo không ghi đè trạng thái banned
+            };
 
-            // Nếu document chưa từng tồn tại (user mới), set mặc định banned = false
+            // Nếu là user mới (chưa có trong DB), thêm ngày tạo
             if (!userDocSnapshot.exists()) {
-                 await setDoc(userDocRef, { banned: false }, { merge: true });
+                payload.createdAt = new Date();
+                payload.banned = false; // Mặc định không bị ban
             }
 
+            await setDoc(userDocRef, payload, { merge: true });
+
         } catch (error) {
-            console.error("Lỗi đồng bộ dữ liệu người dùng:", error);
+            console.error("Lỗi lưu dữ liệu người dùng vào Firestore:", error);
         }
       } else {
         setCurrentUser(null);

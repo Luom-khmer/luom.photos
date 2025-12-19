@@ -79,16 +79,21 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
         
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const users: any[] = [];
-            snapshot.forEach((doc) => {
-                const data = doc.data();
-                // Filter client-side cho đơn giản
+            snapshot.forEach((docSnapshot) => {
+                const data = docSnapshot.data();
+                // Fix quan trọng: Nếu data.email không tồn tại, dùng doc.id làm email
+                const email = data.email || docSnapshot.id;
+                
+                // Filter client-side cho đơn giản: Chỉ hiện những người chưa bị banned
                 if (data.banned !== true) {
-                    users.push(data);
+                    users.push({
+                        ...data,
+                        email: email // Đảm bảo trường email luôn có giá trị
+                    });
                 }
             });
             
             // Sắp xếp theo lần đăng nhập cuối
-            // Helper để lấy miliseconds từ cả Timestamp (Firestore) và Date (JS)
             const getTime = (t: any) => {
                 if (!t) return 0;
                 if (t.seconds) return t.seconds * 1000; // Firestore Timestamp
@@ -116,6 +121,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           return;
       }
       try {
+          // Khi admin thêm tay, ta cũng tạo document để lưu vĩnh viễn
           await setDoc(doc(db, "allowed_users", newUserEmail), {
               email: newUserEmail,
               banned: false,
@@ -123,7 +129,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           }, { merge: true });
           
           setNewUserEmail('');
-          alert(`Đã cấp quyền truy cập cho ${newUserEmail}`);
+          alert(`Đã thêm/cấp quyền cho ${newUserEmail}`);
       } catch (error) {
           console.error("Lỗi thêm user:", error);
           alert("Lỗi kết nối Firestore.");
@@ -138,8 +144,9 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           return;
       }
 
-      if (window.confirm(`Bạn muốn CHẶN quyền truy cập của ${emailToBlock}?\n\nNgười dùng này sẽ không thể đăng nhập nữa.`)) {
+      if (window.confirm(`Bạn muốn CHẶN quyền truy cập của ${emailToBlock}?\n\nNgười dùng này sẽ biến mất khỏi danh sách và không thể đăng nhập nữa.`)) {
           try {
+              // Soft delete: Chỉ đánh dấu banned = true, không xóa khỏi DB
               await updateDoc(doc(db, "allowed_users", emailToBlock), {
                   banned: true,
                   bannedAt: new Date()
@@ -461,10 +468,10 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                     <div className="pt-2 border-t border-gray-200">
                         <label className="text-xs font-bold text-gray-600 uppercase flex items-center mb-2">
                             <Users className="w-3.5 h-3.5 mr-1" />
-                            Danh sách người dùng đã đăng nhập
+                            Danh sách người dùng
                         </label>
                         <p className="text-[10px] text-gray-500 mb-3">
-                            Tất cả người dùng (bao gồm Admin) đăng nhập sẽ tự động hiện ở đây. Xóa email để CHẶN người đó truy cập.
+                            Tất cả người dùng đã từng đăng nhập vào hệ thống.
                         </p>
 
                         {/* Add/Unban User Form */}
@@ -473,7 +480,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                                 type="email" 
                                 value={newUserEmail}
                                 onChange={(e) => setNewUserEmail(e.target.value)}
-                                placeholder="Thêm lại mail đã xóa (gỡ chặn)..." 
+                                placeholder="Thêm/gỡ chặn email..." 
                                 className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 focus:ring-1 focus:ring-green-500 outline-none"
                             />
                             <button 
@@ -490,7 +497,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                             {loadingUsers ? (
                                 <div className="p-3 text-center text-xs text-gray-400">Đang tải danh sách...</div>
                             ) : activeUsers.length === 0 ? (
-                                <div className="p-3 text-center text-xs text-gray-400">Chưa có người dùng nào đăng nhập.</div>
+                                <div className="p-3 text-center text-xs text-gray-400">Chưa có dữ liệu người dùng.</div>
                             ) : (
                                 <ul className="divide-y divide-gray-100">
                                     {activeUsers.map((u) => (

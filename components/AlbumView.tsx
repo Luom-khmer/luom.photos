@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User } from 'lucide-react';
-import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 
 interface AlbumViewProps {
@@ -24,21 +24,6 @@ interface Comment {
     photoId: string;
     albumId: string;
 }
-
-// Helper to save state
-const saveStateToStorage = (albumId: string, photos: Photo[]) => {
-    try {
-        const state = photos.reduce((acc, p) => {
-            if (p.isFavorite || p.isSelected) {
-                acc[p.id] = { f: p.isFavorite, s: p.isSelected };
-            }
-            return acc;
-        }, {} as Record<string, { f: boolean, s: boolean }>);
-        localStorage.setItem(`luom_album_${albumId}`, JSON.stringify(state));
-    } catch (e) {
-        console.error("Lỗi lưu trạng thái:", e);
-    }
-};
 
 export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -65,6 +50,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const touchEndX = useRef<number>(0);
   const minSwipeDistance = 50; // Minimum px to register a swipe
 
+  // 1. Fetch Basic Photo Data from Google Drive
   useEffect(() => {
     const fetchPhotos = async () => {
       setLoading(true);
@@ -75,7 +61,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         const currentHash = window.location.hash;
         const searchParams = new URLSearchParams(currentHash.split('?')[1] || window.location.search);
         
-        // Limit Param
         const limitParam = searchParams.get('limit');
         if (limitParam) {
              const parsedLimit = parseInt(limitParam, 10);
@@ -84,7 +69,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
              }
         }
 
-        // Comment Param
         const commentsParam = searchParams.get('comments');
         if (commentsParam === '1' || commentsParam === 'true') {
             setAllowComments(true);
@@ -94,7 +78,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
           console.error("Lỗi đọc tham số URL:", e);
       }
       
-      // Try to get key from storage, otherwise use default fallback
       let apiKey = localStorage.getItem('google_api_key');
       if (!apiKey) {
           apiKey = 'AIzaSyD0swN9M4-VzVfA0h0mMTb3OSmD8CAcH1c';
@@ -107,7 +90,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       }
 
       try {
-           // 1. Fetch Folder Info
+           // Fetch Folder Info
            const folderRes = await fetch(`https://www.googleapis.com/drive/v3/files/${albumId}?fields=name&key=${apiKey}`);
            
            if (!folderRes.ok) {
@@ -120,43 +103,21 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
            const folderData = await folderRes.json();
            setAlbumName(folderData.name);
 
-           // 2. Fetch Images
+           // Fetch Images
            const imagesRes = await fetch(`https://www.googleapis.com/drive/v3/files?q='${albumId}'+in+parents+and+mimeType+contains+'image/'+and+trashed=false&fields=files(id,name,thumbnailLink,webContentLink)&pageSize=1000&key=${apiKey}`);
            
            if (imagesRes.ok) {
              const imagesData = await imagesRes.json();
              if (imagesData.files && imagesData.files.length > 0) {
-               
-               // Load saved state from LocalStorage
-               let savedState: Record<string, { f: boolean, s: boolean }> = {};
-               try {
-                   const saved = localStorage.getItem(`luom_album_${albumId}`);
-                   if (saved) savedState = JSON.parse(saved);
-               } catch (e) {
-                   console.error("Lỗi đọc trạng thái đã lưu", e);
-               }
-               
-               let initialSelectedCount = 0;
-
-               const mappedPhotos = imagesData.files.map((f: any) => {
-                 const directUrl = `https://lh3.googleusercontent.com/d/${f.id}`;
-                 const saved = savedState[f.id];
-                 
-                 const isFavorite = saved?.f || false;
-                 const isSelected = saved?.s || false;
-                 
-                 if (isSelected) initialSelectedCount++;
-
-                 return {
+               // Map Drive Data (State will be updated by Firestore later)
+               const mappedPhotos = imagesData.files.map((f: any) => ({
                    id: f.id,
-                   url: directUrl,
+                   url: `https://lh3.googleusercontent.com/d/${f.id}`,
                    name: f.name,
-                   isFavorite,
-                   isSelected
-                 };
-               });
+                   isFavorite: false, // Default value, will be synced
+                   isSelected: false  // Default value, will be synced
+               }));
                setPhotos(mappedPhotos);
-               setSelectedCount(initialSelectedCount);
              } else {
                setError("Thư mục này trống.");
              }
@@ -167,6 +128,8 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
           console.error("Error fetching from Drive", e);
           setError(e.message || "Đã xảy ra lỗi khi tải album.");
       } finally {
+          // Do not stop loading immediately if we want to wait for Firestore sync, 
+          // but for UX better to show photos then update state.
           setLoading(false);
       }
     };
@@ -178,6 +141,42 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         setError("ID Album không hợp lệ.");
     }
   }, [albumId]);
+
+  // 2. Firestore Listener: Sync Selections & Favorites Real-time
+  useEffect(() => {
+      if (!albumId || photos.length === 0) return;
+
+      // Listen to 'album_photo_states' collection where albumId matches
+      const q = query(collection(db, "album_photo_states"), where("albumId", "==", albumId));
+
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+          // Create a map of states: photoId -> { isSelected, isFavorite }
+          const stateMap = new Map();
+          snapshot.forEach((doc) => {
+              stateMap.set(doc.data().photoId, doc.data());
+          });
+
+          // Update photos array
+          setPhotos((prevPhotos) => {
+              const updatedPhotos = prevPhotos.map((p) => {
+                  const state = stateMap.get(p.id);
+                  return {
+                      ...p,
+                      isSelected: state?.isSelected || false,
+                      isFavorite: state?.isFavorite || false
+                  };
+              });
+              
+              // Update selected count based on new data
+              const count = updatedPhotos.filter(p => p.isSelected).length;
+              setSelectedCount(count);
+              
+              return updatedPhotos;
+          });
+      });
+
+      return () => unsubscribe();
+  }, [albumId, loading]); // Wait until loading finishes (or at least photos are init)
 
   // Firestore Realtime Comments Listener
   useEffect(() => {
@@ -198,7 +197,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
               loadedComments.push({ id: doc.id, ...doc.data() } as Comment);
           });
           setComments(loadedComments);
-          // Scroll to bottom
           setTimeout(() => {
             commentsEndRef.current?.scrollIntoView({ behavior: "smooth" });
           }, 100);
@@ -223,12 +221,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       setLightboxIndex(prev => (prev - 1 + photos.length) % photos.length);
   };
 
-  // Keyboard navigation for Lightbox
+  // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
         if (lightboxIndex === -1) return;
-        
-        // Disable keyboard nav if user is typing in comment input
         if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
 
         switch(e.key) {
@@ -244,7 +240,8 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 break;
             case ' ': // Space to select/deselect
                 e.preventDefault();
-                toggleSelect(photos[lightboxIndex].id);
+                const currentP = photos[lightboxIndex];
+                if(currentP) toggleSelect(currentP.id);
                 break;
         }
     };
@@ -263,50 +260,57 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     }
   }, [lightboxIndex]);
 
-  const toggleFavorite = (id: string) => {
-    const newPhotos = photos.map(p => 
-      p.id === id ? { ...p, isFavorite: !p.isFavorite } : p
-    );
-    setPhotos(newPhotos);
-    saveStateToStorage(albumId, newPhotos);
+  // UPDATE: Writes to Firestore instead of LocalStorage
+  const toggleFavorite = async (id: string) => {
+    const photo = photos.find(p => p.id === id);
+    if (!photo) return;
+
+    // Use a composite key to store state for this specific photo in this album
+    const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
+    
+    try {
+        await setDoc(docRef, {
+            albumId: albumId,
+            photoId: id,
+            isFavorite: !photo.isFavorite
+        }, { merge: true }); // merge: true preserves isSelected if it exists
+    } catch (e) {
+        console.error("Lỗi lưu trạng thái tim:", e);
+    }
   };
 
-  const toggleSelect = (id: string) => {
-    // Check limit BEFORE mapping to avoid complex rollback
-    const photoToToggle = photos.find(p => p.id === id);
-    if (photoToToggle && !photoToToggle.isSelected && maxSelection !== null && selectedCount >= maxSelection) {
+  // UPDATE: Writes to Firestore instead of LocalStorage
+  const toggleSelect = async (id: string) => {
+    const photo = photos.find(p => p.id === id);
+    if (!photo) return;
+
+    // Check limit based on current local state
+    if (!photo.isSelected && maxSelection !== null && selectedCount >= maxSelection) {
          alert(`Album này giới hạn chỉ được chọn tối đa ${maxSelection} ảnh.`);
          return;
     }
 
-    let newCount = selectedCount;
-    const newPhotos = photos.map(p => {
-        if (p.id === id) {
-            const isNowSelected = !p.isSelected;
-            // Update count based on the change
-            if (p.isSelected && !isNowSelected) newCount--;
-            if (!p.isSelected && isNowSelected) newCount++;
-            return { ...p, isSelected: isNowSelected };
-        }
-        return p;
-    });
-    setPhotos(newPhotos);
-    setSelectedCount(newCount);
-    saveStateToStorage(albumId, newPhotos);
+    const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
+
+    try {
+        await setDoc(docRef, {
+            albumId: albumId,
+            photoId: id,
+            isSelected: !photo.isSelected
+        }, { merge: true }); // merge: true preserves isFavorite if it exists
+    } catch (e) {
+        console.error("Lỗi lưu trạng thái chọn:", e);
+    }
   };
 
   const handleDownload = (id: string, name?: string, e?: React.MouseEvent) => {
       e?.stopPropagation();
-      // Use the Google Drive export=download link to ensure original quality
       const url = `https://drive.google.com/uc?export=download&id=${id}`;
-      
       const link = document.createElement('a');
       link.href = url;
-      // Hint filename (browser might ignore cross-origin, but good practice)
       if (name) link.setAttribute('download', name);
       link.setAttribute('target', '_blank');
       link.setAttribute('rel', 'noopener noreferrer');
-      
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -318,7 +322,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
           alert("Chưa có ảnh nào được chọn! Vui lòng chọn ảnh trước khi sao chép.");
           return;
       }
-      
       const text = selected.map(p => p.name).join('\n');
       navigator.clipboard.writeText(text).then(() => {
           alert(`Đã sao chép ${selected.length} tên file vào bộ nhớ tạm!`);
@@ -360,7 +363,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
 
   // Swipe Handlers
   const onTouchStart = (e: React.TouchEvent) => {
-      if (isZoomed) return; // Disable swipe when zoomed to allow panning
+      if (isZoomed) return;
       touchEndX.current = 0;
       touchStartX.current = e.targetTouches[0].clientX;
   };
@@ -372,20 +375,12 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
 
   const onTouchEnd = () => {
       if (isZoomed || !touchStartX.current || !touchEndX.current) return;
-      
       const distance = touchStartX.current - touchEndX.current;
       const isLeftSwipe = distance > minSwipeDistance;
       const isRightSwipe = distance < -minSwipeDistance;
 
-      if (isLeftSwipe) {
-          // Swipe Left -> Next Photo
-          nextPhoto();
-      }
-      
-      if (isRightSwipe) {
-          // Swipe Right -> Prev Photo
-          prevPhoto();
-      }
+      if (isLeftSwipe) nextPhoto();
+      if (isRightSwipe) prevPhoto();
   };
 
   if (loading) {
@@ -410,7 +405,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       );
   }
 
-  // Helper to get current photo in lightbox
   const currentPhoto = lightboxIndex >= 0 ? photos[lightboxIndex] : null;
 
   return (
@@ -469,7 +463,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                         <Download className="w-4 h-4" />
                     </button>
 
-                    {/* Selection Indicator (Clickable separately) */}
+                    {/* Selection Indicator */}
                     {photo.isSelected ? (
                         <div 
                             className="absolute top-2 left-2 z-20"
@@ -480,7 +474,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                             </div>
                         </div>
                     ) : (
-                        // Show empty circle on hover to indicate selection available
                         <div 
                             className="absolute top-2 left-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity"
                             onClick={(e) => { e.stopPropagation(); toggleSelect(photo.id); }}
@@ -545,7 +538,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                     </button>
                 </div>
 
-                {/* Floating Action Buttons on Image - Vertical Stack Bottom Right */}
+                {/* Floating Action Buttons on Image */}
                 <div className="absolute bottom-4 right-4 flex flex-col gap-4 z-30 pointer-events-auto">
                      {/* Select Toggle */}
                      <button 
@@ -574,7 +567,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                          <Download className="w-6 h-6" />
                      </button>
 
-                     {/* Message (Updated) */}
+                     {/* Message */}
                      {allowComments && (
                          <button 
                             onClick={(e) => { e.stopPropagation(); setShowComments(!showComments); }}
@@ -661,7 +654,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                     </div>
                 )}
 
-                {/* The Image Scrollable Wrapper */}
+                {/* The Image */}
                 <div 
                     className={`w-full h-full flex items-center justify-center ${isZoomed ? 'overflow-auto items-start' : 'overflow-hidden'}`}
                     onClick={(e) => { if(isZoomed) toggleZoom(e); }}
@@ -717,10 +710,9 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         </div>
       )}
 
-      {/* FABs - Floating Action Buttons (Hidden when lightbox is open) */}
+      {/* FABs */}
       {lightboxIndex === -1 && (
         <div className="fixed bottom-10 right-4 flex flex-col gap-3 z-50 items-center">
-             {/* 1. Export Excel (Green) */}
              <button 
                 className="w-10 h-10 md:w-11 md:h-11 bg-[#0F9D58] text-white rounded-full shadow-xl flex items-center justify-center hover:bg-[#0B8043] transition-transform hover:scale-110 tooltip-left"
                 title="Xuất Excel"
@@ -728,7 +720,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 <FileSpreadsheet className="w-5 h-5 md:w-6 md:h-6" />
              </button>
 
-             {/* 2. Confirm Check (Green) */}
              <button 
                 className="w-10 h-10 md:w-11 md:h-11 bg-[#4CAF50] text-white rounded-full shadow-xl flex items-center justify-center hover:bg-[#43A047] transition-transform hover:scale-110"
                 title="Xác nhận chọn"
@@ -736,7 +727,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 <Check className="w-6 h-6 md:w-7 md:h-7 stroke-[3]" />
              </button>
 
-             {/* 3. Copy / Files (Blue) */}
              <button 
                 onClick={handleCopySelectedNames}
                 className="w-10 h-10 md:w-11 md:h-11 bg-[#2979FF] text-white rounded-full shadow-xl flex items-center justify-center hover:bg-[#2962FF] transition-transform hover:scale-110"
@@ -745,7 +735,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 <Copy className="w-5 h-5 md:w-6 md:h-6" />
              </button>
 
-             {/* 4. Counter (Red Diamond Shape) */}
              <div className="pt-1">
                 <button className={`w-10 h-10 md:w-11 md:h-11 text-white shadow-xl flex items-center justify-center transform rotate-45 hover:scale-110 transition-transform cursor-default border-2 border-white ${maxSelection !== null && selectedCount >= maxSelection ? 'bg-gray-500' : 'bg-[#FF0000]'}`}>
                     <span className="transform -rotate-45 font-bold text-sm md:text-base">
