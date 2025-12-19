@@ -7,7 +7,7 @@ import { User } from 'firebase/auth';
 interface AlbumViewProps {
   albumId: string;
   albumRef: string | null;
-  user: User | null; // Nhận user để lấy UID
+  user: User | null; 
 }
 
 interface Photo {
@@ -53,19 +53,23 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   const touchEndX = useRef<number>(0);
   const minSwipeDistance = 50; 
 
-  // --- LOGIC PHÂN BIỆT PHIÊN LÀM VIỆC (SESSION SCOPE) ---
-  // Nếu có albumRef trên URL (ví dụ &ref=abc) -> Dùng ref đó (Chế độ chia sẻ phiên)
-  // Nếu KHÔNG có ref -> Dùng user.uid (Chế độ riêng tư/ẩn danh - Mỗi người 1 kho riêng)
+  // --- LOGIC MỚI: CHẾ ĐỘ DÙNG CHUNG (SHARED STATE) ---
+  // Thay vì dùng user.uid (làm mỗi người 1 vẻ), ta dùng từ khóa cố định 'global'.
+  // Điều này đảm bảo Khách A, Khách B và Admin đều nhìn thấy và thao tác trên cùng 1 dữ liệu.
   const sessionScope = useMemo(() => {
+      // Nếu link có mã ref đặc biệt (ví dụ chia sẻ riêng tư &ref=teamA), dùng ref đó.
       if (albumRef) return albumRef;
-      return user?.uid || 'guest_unknown';
-  }, [albumRef, user]);
+      
+      // MẶC ĐỊNH: 'global'. 
+      // Mọi user không có ref sẽ chui vào đây. Dữ liệu được đồng bộ cho tất cả.
+      return 'global';
+  }, [albumRef]);
 
-  // LOCAL STORAGE KEY: Phân biệt theo sessionScope
+  // LOCAL STORAGE KEY: Dùng chung cho phiên này
   const SESSION_KEY = `${albumId}_${sessionScope}`;
   const LOCAL_STORAGE_KEY = `luom_album_state_${SESSION_KEY}`;
 
-  // 1. Load LocalStorage
+  // 1. Load LocalStorage (Để phản hồi nhanh)
   useEffect(() => {
       try {
           const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -210,11 +214,11 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     }
   }, [albumId]);
 
-  // 3. Firestore Listener
+  // 3. Firestore Listener (REAL-TIME SYNC)
   useEffect(() => {
       if (!albumId) return;
 
-      // QUERY: Lọc theo sessionScope (UID hoặc Ref)
+      // QUERY: Lọc theo sessionScope ('global' hoặc ref)
       const q = query(
           collection(db, "album_photo_states"), 
           where("albumId", "==", albumId),
@@ -313,6 +317,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
 
   // --- HÀM LƯU DỮ LIỆU ---
   // Helper để tạo Doc ID duy nhất: AlbumID + SessionScope + PhotoID
+  // Ví dụ: 12345_global_photo001 -> Ai vào cũng ghi đè lên file này -> Đồng bộ hóa.
   const getDocId = (photoId: string) => {
       return `${albumId}_${sessionScope}_${photoId}`;
   };
@@ -335,7 +340,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            ref: sessionScope, // Lưu với Scope (UID hoặc Ref)
+            ref: sessionScope, // Luôn là 'global' nếu không có ref
             isFavorite: newState,
             updatedAt: Timestamp.now(),
             updatedBy: user?.uid || 'anonymous'
@@ -368,7 +373,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            ref: sessionScope, // Lưu với Scope (UID hoặc Ref)
+            ref: sessionScope, // Luôn là 'global' nếu không có ref
             isSelected: newState,
             updatedAt: Timestamp.now(),
             updatedBy: user?.uid || 'anonymous'
