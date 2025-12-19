@@ -256,10 +256,18 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     }
   }, [lightboxIndex]);
 
-  // Write to Firestore
+  // Write to Firestore with Optimistic UI
   const toggleFavorite = async (id: string) => {
     const photo = photos.find(p => p.id === id);
     if (!photo) return;
+    
+    // Optimistic Update: Cập nhật state tạm thời ngay lập tức
+    const newState = !photo.isFavorite;
+    const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
+    
+    const tempMap = new Map(photoStates);
+    tempMap.set(id, { ...currentState, isFavorite: newState });
+    setPhotoStates(tempMap);
 
     const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
     
@@ -267,15 +275,20 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            isFavorite: !photo.isFavorite
+            isFavorite: newState
         }, { merge: true });
-        // Không cần update state local, onSnapshot sẽ tự lo việc đó
-    } catch (e) {
+    } catch (e: any) {
         console.error("Lỗi lưu trạng thái tim:", e);
+        // Revert UI if fail
+        tempMap.set(id, { ...currentState, isFavorite: !newState });
+        setPhotoStates(new Map(tempMap));
+        if (e.code === 'permission-denied') {
+            alert("Lỗi: Bạn không có quyền thực hiện hành động này. Vui lòng tải lại trang.");
+        }
     }
   };
 
-  // Write to Firestore
+  // Write to Firestore with Optimistic UI
   const toggleSelect = async (id: string) => {
     const photo = photos.find(p => p.id === id);
     if (!photo) return;
@@ -284,6 +297,14 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
          alert(`Album này giới hạn chỉ được chọn tối đa ${maxSelection} ảnh.`);
          return;
     }
+    
+    // Optimistic Update
+    const newState = !photo.isSelected;
+    const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
+    
+    const tempMap = new Map(photoStates);
+    tempMap.set(id, { ...currentState, isSelected: newState });
+    setPhotoStates(tempMap);
 
     const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
 
@@ -291,10 +312,16 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            isSelected: !photo.isSelected
+            isSelected: newState
         }, { merge: true });
-    } catch (e) {
+    } catch (e: any) {
         console.error("Lỗi lưu trạng thái chọn:", e);
+        // Revert UI
+        tempMap.set(id, { ...currentState, isSelected: !newState });
+        setPhotoStates(new Map(tempMap));
+        if (e.code === 'permission-denied') {
+            alert("Lỗi: Không thể lưu lựa chọn. Vui lòng kiểm tra kết nối mạng hoặc tải lại trang.");
+        }
     }
   };
 
@@ -350,9 +377,13 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
               userId: user?.uid || "guest"
           });
           setNewComment("");
-      } catch (e) {
+      } catch (e: any) {
           console.error("Lỗi gửi bình luận:", e);
-          alert("Không thể gửi bình luận.");
+           if (e.code === 'permission-denied') {
+            alert("Không thể gửi bình luận. Bạn không có quyền ghi dữ liệu.");
+           } else {
+            alert("Không thể gửi bình luận.");
+           }
       }
   };
 

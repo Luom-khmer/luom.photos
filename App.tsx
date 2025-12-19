@@ -4,7 +4,7 @@ import { Footer } from './components/Footer';
 import { CreateAlbumForm } from './components/CreateAlbumForm';
 import { AlbumView } from './components/AlbumView';
 import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, User, signInAnonymously } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
@@ -16,21 +16,27 @@ const App: React.FC = () => {
     const getAlbumIdFromUrl = () => {
         try {
             if (typeof window === 'undefined') return null;
+            let id = null;
+
             if (window.location.hash && window.location.hash.includes('album=')) {
                 const hash = window.location.hash;
                 const parts = hash.includes('?') ? hash.split('?') : [hash];
                 if (parts.length > 1) {
                     const params = new URLSearchParams(parts[1]);
-                    if (params.get('album')) return params.get('album');
+                    if (params.get('album')) id = params.get('album');
                 } else {
                      const cleanHash = hash.substring(1); 
                      const params = new URLSearchParams(cleanHash);
-                     if (params.get('album')) return params.get('album');
+                     if (params.get('album')) id = params.get('album');
                 }
+            } else {
+                const params = new URLSearchParams(window.location.search);
+                const idFromSearch = params.get('album');
+                if (idFromSearch) id = idFromSearch;
             }
-            const params = new URLSearchParams(window.location.search);
-            const idFromSearch = params.get('album');
-            if (idFromSearch) return idFromSearch;
+            
+            // QUAN TRỌNG: Loại bỏ khoảng trắng thừa để ID luôn nhất quán
+            return id ? id.trim() : null;
         } catch (error) {
             console.error("Error parsing URL for album ID:", error);
         }
@@ -49,51 +55,55 @@ const App: React.FC = () => {
 
     // 2. Firebase Auth Listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user && user.email) {
+      if (user) {
         // Cập nhật UI ngay lập tức
         setCurrentUser(user);
 
-        const email = user.email;
-        const userDocRef = doc(db, 'allowed_users', email);
+        // Chỉ xử lý logic lưu user nếu là đăng nhập Google (có email)
+        if (user.email) {
+            const email = user.email;
+            const userDocRef = doc(db, 'allowed_users', email);
 
-        try {
-            // Lấy dữ liệu hiện tại để kiểm tra trạng thái BAN
-            const userDocSnapshot = await getDoc(userDocRef);
-            const userData = userDocSnapshot.exists() ? userDocSnapshot.data() : null;
+            try {
+                // Lấy dữ liệu hiện tại để kiểm tra trạng thái BAN
+                const userDocSnapshot = await getDoc(userDocRef);
+                const userData = userDocSnapshot.exists() ? userDocSnapshot.data() : null;
 
-            // Nếu bị ban và không phải Admin -> Logout
-            if (!ADMIN_EMAILS.includes(email) && userData && userData.banned === true) {
-                await logoutUser();
-                setCurrentUser(null);
-                alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
-                return;
+                // Nếu bị ban và không phải Admin -> Logout
+                if (!ADMIN_EMAILS.includes(email) && userData && userData.banned === true) {
+                    await logoutUser();
+                    setCurrentUser(null);
+                    alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
+                    return;
+                }
+
+                const payload: any = { 
+                    email: email,
+                    lastLogin: new Date(),
+                    photoURL: user.photoURL || '',
+                    displayName: user.displayName || '',
+                };
+
+                if (!userDocSnapshot.exists()) {
+                    payload.createdAt = new Date();
+                    payload.banned = false;
+                }
+
+                await setDoc(userDocRef, payload, { merge: true });
+
+            } catch (error) {
+                console.error("Lỗi lưu dữ liệu người dùng vào Firestore:", error);
             }
-
-            // --- QUAN TRỌNG: LUÔN LƯU USER VÀO DB KHI ĐĂNG NHẬP ---
-            // Sử dụng setDoc với merge: true để đảm bảo:
-            // 1. Nếu chưa có -> Tạo mới.
-            // 2. Nếu đã có -> Cập nhật lastLogin.
-            const payload: any = { 
-                email: email, // Luôn ghi đè email để chắc chắn trường này tồn tại
-                lastLogin: new Date(),
-                photoURL: user.photoURL || '',
-                displayName: user.displayName || '',
-                // Đảm bảo không ghi đè trạng thái banned
-            };
-
-            // Nếu là user mới (chưa có trong DB), thêm ngày tạo
-            if (!userDocSnapshot.exists()) {
-                payload.createdAt = new Date();
-                payload.banned = false; // Mặc định không bị ban
-            }
-
-            await setDoc(userDocRef, payload, { merge: true });
-
-        } catch (error) {
-            console.error("Lỗi lưu dữ liệu người dùng vào Firestore:", error);
         }
       } else {
-        setCurrentUser(null);
+        // Nếu không có user (khách truy cập), thử đăng nhập ẩn danh để có quyền ghi Firestore
+        // Điều này giúp khách vẫn có thể Tim/Chọn ảnh nếu Rules yêu cầu "auth != null"
+        try {
+            await signInAnonymously(auth);
+        } catch (error) {
+            console.error("Lỗi đăng nhập ẩn danh cho khách:", error);
+            setCurrentUser(null);
+        }
       }
     });
 
