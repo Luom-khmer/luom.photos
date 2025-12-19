@@ -13,6 +13,21 @@ interface Photo {
   isSelected: boolean;
 }
 
+// Helper to save state
+const saveStateToStorage = (albumId: string, photos: Photo[]) => {
+    try {
+        const state = photos.reduce((acc, p) => {
+            if (p.isFavorite || p.isSelected) {
+                acc[p.id] = { f: p.isFavorite, s: p.isSelected };
+            }
+            return acc;
+        }, {} as Record<string, { f: boolean, s: boolean }>);
+        localStorage.setItem(`luom_album_${albumId}`, JSON.stringify(state));
+    } catch (e) {
+        console.error("Lỗi lưu trạng thái:", e);
+    }
+};
+
 export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,17 +83,37 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
            if (imagesRes.ok) {
              const imagesData = await imagesRes.json();
              if (imagesData.files && imagesData.files.length > 0) {
+               
+               // Load saved state from LocalStorage
+               let savedState: Record<string, { f: boolean, s: boolean }> = {};
+               try {
+                   const saved = localStorage.getItem(`luom_album_${albumId}`);
+                   if (saved) savedState = JSON.parse(saved);
+               } catch (e) {
+                   console.error("Lỗi đọc trạng thái đã lưu", e);
+               }
+               
+               let initialSelectedCount = 0;
+
                const mappedPhotos = imagesData.files.map((f: any) => {
                  const directUrl = `https://lh3.googleusercontent.com/d/${f.id}`;
+                 const saved = savedState[f.id];
+                 
+                 const isFavorite = saved?.f || false;
+                 const isSelected = saved?.s || false;
+                 
+                 if (isSelected) initialSelectedCount++;
+
                  return {
                    id: f.id,
                    url: directUrl,
                    name: f.name,
-                   isFavorite: false,
-                   isSelected: false
+                   isFavorite,
+                   isSelected
                  };
                });
                setPhotos(mappedPhotos);
+               setSelectedCount(initialSelectedCount);
              } else {
                setError("Thư mục này trống.");
              }
@@ -154,9 +189,11 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   }, [lightboxIndex]);
 
   const toggleFavorite = (id: string) => {
-    setPhotos(photos.map(p => 
+    const newPhotos = photos.map(p => 
       p.id === id ? { ...p, isFavorite: !p.isFavorite } : p
-    ));
+    );
+    setPhotos(newPhotos);
+    saveStateToStorage(albumId, newPhotos);
   };
 
   const toggleSelect = (id: string) => {
@@ -173,6 +210,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     });
     setPhotos(newPhotos);
     setSelectedCount(newCount);
+    saveStateToStorage(albumId, newPhotos);
   };
 
   const handleDownload = (id: string, name?: string, e?: React.MouseEvent) => {
