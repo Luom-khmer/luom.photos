@@ -3,7 +3,7 @@ import { Triangle, Download, MessageSquare, List, Plus, Info, Loader2, CheckCirc
 import { Switch } from './ui/Switch';
 import { User } from 'firebase/auth';
 import { db, ADMIN_EMAILS } from '../firebaseConfig';
-import { collection, doc, setDoc, updateDoc, onSnapshot, query, Timestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, onSnapshot, query } from 'firebase/firestore';
 
 interface CreateAlbumFormProps {
   user: User | null;
@@ -222,8 +222,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   }, [driveLink]);
 
   const generateSessionId = () => {
-      // Tạo mã ngẫu nhiên 6 ký tự (VD: A7X2M9)
-      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Bỏ các ký tự dễ nhầm (I, O, 1, 0)
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; 
       let result = '';
       for (let i = 0; i < 6; i++) {
           result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -237,16 +236,15 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
     if (status === 'success' && folderMetadata) {
       setIsCreating(true);
       
-      // 1. Tạo Session ID
       const sessionId = generateSessionId();
       
-      // 2. Lưu Mapping vào Firestore (Bảng 'sessions' thay vì 'albums')
       try {
-          await setDoc(doc(db, "sessions", sessionId), {
+          // Timeout race để tránh treo
+          const savePromise = setDoc(doc(db, "sessions", sessionId), {
               sessionId: sessionId,
               driveFolderId: folderMetadata.id,
               albumName: folderMetadata.name,
-              createdAt: Timestamp.now(),
+              createdAt: new Date(), // Dùng new Date() thay vì Timestamp.now()
               createdBy: user?.email || 'anonymous',
               settings: {
                   allowDownload,
@@ -257,16 +255,25 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
               }
           });
 
-          // 3. Tạo Link
+          // Giới hạn 10 giây
+          await Promise.race([
+              savePromise,
+              new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 10000))
+          ]);
+
           const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://luomphotos.com';
           const baseUrl = currentUrl.split('?')[0].split('#')[0];
           const finalUrl = `${baseUrl}?session=${sessionId}`;
           
           setCreatedSessionId(sessionId);
           setCreatedLink(finalUrl);
-      } catch (error) {
-          console.error("Lỗi khi tạo phiên trên Firestore:", error);
-          alert("Lỗi: Không thể lưu thông tin phiên vào hệ thống.");
+      } catch (error: any) {
+          console.error("Lỗi tạo phiên:", error);
+          if (error.message === 'Timeout') {
+              alert("Lỗi: Server phản hồi quá lâu. Vui lòng kiểm tra mạng.");
+          } else {
+              alert("Lỗi: Không thể lưu session. Kiểm tra quyền truy cập hoặc kết nối mạng.");
+          }
       } finally {
           setIsCreating(false);
       }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon, Cloud, Activity, Globe, Save, FileText, RefreshCw, List, WifiOff } from 'lucide-react';
-import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc, getDoc } from 'firebase/firestore';
+import { collection, addDoc, query, where, orderBy, onSnapshot, doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { User } from 'firebase/auth';
 
@@ -357,7 +357,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, user }) => {
             fileId: id,
             fileName: photo.name,
             isFavorite: newState,
-            updatedAt: Timestamp.now(),
+            updatedAt: new Date(), // Dùng new Date() thay vì Timestamp
             updatedByName: userName
         }, { merge: true });
     } catch (e: any) {
@@ -383,7 +383,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, user }) => {
     const newState = !photo.isSelected;
     const userName = getUserDisplayName();
     const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
-    const now = Timestamp.now();
+    const now = new Date(); // Dùng new Date() thay vì Timestamp
 
     // Optimistic Update
     const tempMap = new Map(photoStates);
@@ -477,7 +477,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, user }) => {
       try {
           await addDoc(collection(db, "album_comments"), {
               albumId: albumId, photoId: filteredPhotos[lightboxIndex].id, text: newComment.trim(),
-              userName: userName, userAvatar: userAvatar, createdAt: Timestamp.now(), userId: user?.uid || "guest"
+              userName: userName, userAvatar: userAvatar, createdAt: new Date(), userId: user?.uid || "guest"
           });
           setNewComment("");
       } catch (e: any) { console.error("Lỗi gửi bình luận:", e); alert("Không thể gửi bình luận."); }
