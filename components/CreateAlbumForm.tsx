@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw } from 'lucide-react';
+import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw, Shield, Users } from 'lucide-react';
 import { Switch } from './ui/Switch';
 import { User } from 'firebase/auth';
 
@@ -7,12 +7,20 @@ interface CreateAlbumFormProps {
   user: User | null;
 }
 
+// --- CẤU HÌNH DANH SÁCH ADMIN ---
+// Tôi đã thêm sẵn email của bạn vào đây.
+// Chỉ những email trong danh sách này mới thấy nút cài đặt API Key.
+const ADMIN_EMAILS = [
+    "1touch.pro.vn@gmail.com",
+    "admin@gmail.com" 
+];
+
 export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [driveLink, setDriveLink] = useState('');
   const [password, setPassword] = useState('');
   
-  // Logic xác định quyền Admin: Chỉ cần đăng nhập là được coi là Admin quản lý
-  const isAdmin = !!user;
+  // Logic xác định quyền Admin: Phải đăng nhập VÀ email nằm trong danh sách cho phép
+  const isAdmin = user && user.email && ADMIN_EMAILS.includes(user.email);
 
   // API Key State
   const [apiKey, setApiKey] = useState(() => {
@@ -78,7 +86,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
     if (!apiKey) {
         setStatus('error');
         setErrorMessage(isAdmin 
-            ? 'Yêu cầu Google API Key. Vui lòng nhấn vào icon bánh răng để cài đặt.'
+            ? 'Yêu cầu Google API Key. Admin vui lòng cài đặt.'
             : 'Hệ thống chưa cấu hình API Key. Vui lòng liên hệ Admin.'
         );
         setFolderMetadata(null);
@@ -157,7 +165,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             setShowSettings(true);
             alert('Vui lòng nhập Google API Key để tiếp tục.');
         } else {
-            alert('Hệ thống thiếu API Key. Vui lòng đăng nhập quyền Admin để cấu hình.');
+            alert('Hệ thống thiếu API Key. Chỉ Admin mới có quyền cấu hình.');
         }
       } else {
          alert('Vui lòng nhập đường dẫn thư mục Google Drive hợp lệ.');
@@ -276,12 +284,12 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             <h2 className="text-2xl md:text-3xl font-light text-center text-gray-700 tracking-wide uppercase flex-1">
             Bắt Đầu Tạo Album Ảnh
             </h2>
-            {/* ONLY SHOW SETTINGS IF ADMIN (LOGGED IN) */}
+            {/* LOGIC: CHỈ ADMIN MỚI THẤY NÚT SETTINGS */}
             {isAdmin && (
                 <button 
                     onClick={() => setShowSettings(!showSettings)}
                     className="text-gray-400 hover:text-gray-700 transition-colors p-1"
-                    title="Cài đặt API Key (Admin Only)"
+                    title="Cài đặt hệ thống (Admin)"
                 >
                     <Settings className={`w-5 h-5 ${!apiKey ? 'text-red-400 animate-pulse' : ''}`} />
                 </button>
@@ -292,7 +300,27 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
         {isAdmin && showSettings && (
             <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg animate-in fade-in slide-in-from-top-2 relative">
                 <div className="flex justify-between items-center mb-2">
-                    <label className="text-xs font-bold text-gray-600 uppercase flex items-center">
+                    <div className="flex items-center gap-2">
+                         <div className="bg-red-100 p-1 rounded text-red-600">
+                            <Shield className="w-4 h-4" />
+                         </div>
+                         <label className="text-xs font-bold text-gray-600 uppercase">
+                            Admin Control Panel
+                         </label>
+                    </div>
+                    <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4"/></button>
+                </div>
+
+                {/* Admin User Info */}
+                <div className="mb-4 text-xs text-gray-500 border-b border-gray-200 pb-2">
+                    <div className="flex items-center">
+                        <Users className="w-3 h-3 mr-1" />
+                        Quản trị viên đang đăng nhập: <strong className="ml-1 text-gray-700">{user?.email}</strong>
+                    </div>
+                </div>
+
+                <div className="mb-2">
+                    <label className="text-xs font-bold text-gray-600 uppercase flex items-center mb-1">
                         Google API Key
                         <button 
                             onClick={(e) => { e.preventDefault(); setShowGuide(true); }}
@@ -302,20 +330,19 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                             Cách lấy Key?
                         </button>
                     </label>
-                    <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4"/></button>
+                    <div className="relative">
+                        <input 
+                            type="text" 
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
+                            placeholder="AIza..."
+                            className="w-full text-sm border border-gray-300 rounded p-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none pr-8 font-mono"
+                        />
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-1">
+                       API Key này sẽ được dùng cho toàn bộ hệ thống trên trình duyệt này.
+                    </p>
                 </div>
-                <div className="relative">
-                    <input 
-                        type="text" 
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder="Dán API Key của bạn vào đây (bắt đầu bằng AIza...)"
-                        className="w-full text-sm border border-gray-300 rounded p-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none pr-8"
-                    />
-                </div>
-                <p className="text-[10px] text-gray-500 mt-1">
-                   API Key được lưu trên trình duyệt của bạn để sử dụng cho lần sau.
-                </p>
             </div>
         )}
 
