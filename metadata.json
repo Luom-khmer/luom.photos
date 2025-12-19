@@ -1,0 +1,5 @@
+{
+  "name": "luom se",
+  "description": "A clone of the chonanh.com album creation interface using React and Tailwind CSS.",
+  "requestFramePermissions": []
+}
