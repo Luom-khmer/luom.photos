@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon, Users, Cloud, CloudLightning, Activity, Globe, Save, FileText, RefreshCw, List, WifiOff } from 'lucide-react';
+import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon, Cloud, Activity, Globe, Save, FileText, RefreshCw, List, WifiOff } from 'lucide-react';
 import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc, getDoc } from 'firebase/firestore';
-import { db, auth } from '../firebaseConfig';
+import { db } from '../firebaseConfig';
 import { User } from 'firebase/auth';
 
 interface AlbumViewProps {
@@ -47,7 +47,7 @@ const formatTimestamp = (timestamp: any) => {
     });
 };
 
-export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user }) => {
+export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, user }) => {
   const [drivePhotos, setDrivePhotos] = useState<Photo[]>([]);
   
   // Map lưu trạng thái từ Server (Key: fileId)
@@ -271,7 +271,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
       };
 
       // Thử nghe bảng mới 'selections' trước
-      const unsubscribe = onSnapshot(q, handleSnapshot, (error) => {
+      const unsubscribe = onSnapshot(q, handleSnapshot, (_error) => {
           // Nếu lỗi hoặc không có quyền (do rule), thử nghe bảng cũ
           console.log("Listening to legacy collection...");
           onSnapshot(qLegacy, handleSnapshot);
@@ -447,7 +447,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
       navigator.clipboard.writeText(text).then(() => {
           setIsCopyingList(true);
           setTimeout(() => setIsCopyingList(false), 2000);
-      }).catch(err => { alert('Không thể sao chép vào bộ nhớ tạm.'); });
+      }).catch(() => { alert('Không thể sao chép vào bộ nhớ tạm.'); });
   };
 
   // Logic Export CSV
