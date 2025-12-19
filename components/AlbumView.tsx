@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User, Filter, Grid, Image as ImageIcon } from 'lucide-react';
+import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User, Grid, Image as ImageIcon } from 'lucide-react';
 import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 
