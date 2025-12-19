@@ -3,7 +3,7 @@ import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, Chec
 import { Switch } from './ui/Switch';
 import { User } from 'firebase/auth';
 import { db, ADMIN_EMAILS } from '../firebaseConfig';
-import { collection, doc, setDoc, updateDoc, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, onSnapshot, query } from 'firebase/firestore';
 
 interface CreateAlbumFormProps {
   user: User | null;
@@ -760,6 +760,28 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           </div>
 
         </form>
+
+        {/* Modal Hướng Dẫn - Sử dụng biến showGuide để fix lỗi TS6133 */}
+        {showGuide && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowGuide(false)}>
+                <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full animate-in fade-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                    <h3 className="text-lg font-bold text-gray-800 mb-2">Hướng Dẫn Cấu Hình</h3>
+                    <div className="space-y-3 text-sm text-gray-600">
+                        <p>1. Truy cập <strong>Google Cloud Console</strong>.</p>
+                        <p>2. Tạo Project mới hoặc chọn Project hiện có.</p>
+                        <p>3. Kích hoạt <strong>Google Drive API</strong>.</p>
+                        <p>4. Tạo <strong>API Key</strong> trong mục Credentials.</p>
+                        <p>5. Copy Key và dán vào ô nhập liệu.</p>
+                    </div>
+                    <button 
+                        onClick={() => setShowGuide(false)}
+                        className="mt-6 w-full bg-green-600 text-white py-2 rounded-md hover:bg-green-700"
+                    >
+                        Đã Hiểu
+                    </button>
+                </div>
+            </div>
+        )}
       </div>
     </div>
   );

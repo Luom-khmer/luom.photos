@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, LogIn, Copy, Mail, Globe, LogOut, User as UserIcon, Facebook } from 'lucide-react';
+import { Home, LogIn, Copy, Globe, LogOut, User as UserIcon, Facebook } from 'lucide-react';
 import { User } from 'firebase/auth';
 
 interface HeaderProps {
