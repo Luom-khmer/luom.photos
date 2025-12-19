@@ -6,10 +6,12 @@ import { AlbumView } from './components/AlbumView';
 import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
 import { onAuthStateChanged, User, signInAnonymously } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
   const [albumId, setAlbumId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false); // Trạng thái chờ Auth
 
   useEffect(() => {
     // 1. URL Parsing Logic
@@ -35,7 +37,6 @@ const App: React.FC = () => {
                 if (idFromSearch) id = idFromSearch;
             }
             
-            // QUAN TRỌNG: Loại bỏ khoảng trắng thừa để ID luôn nhất quán
             return id ? id.trim() : null;
         } catch (error) {
             console.error("Error parsing URL for album ID:", error);
@@ -56,16 +57,13 @@ const App: React.FC = () => {
     // 2. Firebase Auth Listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // Kiểm tra loại user
+        // Có user (kể cả User thật hoặc Ẩn danh)
         if (user.isAnonymous) {
-            // Nếu là ẩn danh: Vẫn giữ currentUser là null để UI không hiện thông tin user
-            // Nhưng Firebase SDK đã có token để ghi vào Firestore
-            console.log("Silent Anonymous Auth Active");
-            setCurrentUser(null);
+            console.log("Silent Anonymous Auth Active:", user.uid);
+            setCurrentUser(null); // UI vẫn hiện là khách
         } else {
-            // Nếu là user thật (Google Login)
             setCurrentUser(user);
-
+            
             // Logic lưu user admin/google
             if (user.email) {
                 const email = user.email;
@@ -101,13 +99,16 @@ const App: React.FC = () => {
                 }
             }
         }
+        setIsAuthReady(true); // Đã sẵn sàng render App
       } else {
-        // Không có user nào (kể cả ẩn danh) -> Kích hoạt đăng nhập ẩn danh ngầm
-        // Điều này cần thiết để Firestore cho phép ghi dữ liệu (theo Rules mặc định)
-        setCurrentUser(null);
+        // Chưa có user -> Kích hoạt đăng nhập ẩn danh ngay lập tức
+        console.log("Initializing Anonymous Auth...");
         signInAnonymously(auth).catch((error) => {
             console.error("Lỗi kích hoạt chế độ khách:", error);
+            // Nếu lỗi quá nặng, vẫn cho render nhưng tính năng ghi sẽ hỏng
+            setIsAuthReady(true); 
         });
+        // Không set isAuthReady(true) ở đây, chờ callback chạy lại vào nhánh 'if (user)'
       }
     });
 
@@ -123,14 +124,23 @@ const App: React.FC = () => {
     try {
       await loginWithGoogle();
     } catch (error) {
-      // Alert đã được xử lý trong loginWithGoogle
+      // Alert handled in loginWithGoogle
     }
   };
 
   const handleLogout = async () => {
     await logoutUser();
-    // Sau khi logout Google, Auth Listener sẽ chạy vào block 'else' và tự động sign in Anonymously lại
   };
+
+  // Màn hình chờ khi đang xác thực ngầm
+  if (!isAuthReady) {
+      return (
+          <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
+              <Loader2 className="w-10 h-10 text-green-600 animate-spin mb-4" />
+              <p className="text-gray-500 font-medium">Đang khởi tạo hệ thống...</p>
+          </div>
+      );
+  }
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50 font-sans text-gray-900">

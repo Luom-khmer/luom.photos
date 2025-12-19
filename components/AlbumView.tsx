@@ -55,6 +55,35 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const touchEndX = useRef<number>(0);
   const minSwipeDistance = 50; 
 
+  // LOCAL STORAGE KEY
+  const LOCAL_STORAGE_KEY = `luom_album_state_${albumId}`;
+
+  // 1. Load LocalStorage Initial State (Backup layer)
+  useEffect(() => {
+      try {
+          const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
+          if (savedState) {
+              const parsed = JSON.parse(savedState);
+              if (Array.isArray(parsed)) {
+                  const localMap = new Map();
+                  parsed.forEach((item: any) => {
+                      if(item.photoId) localMap.set(item.photoId, item);
+                  });
+                  // Set initial state from LocalStorage immediately to prevent flickering
+                  setPhotoStates(prev => {
+                      const newMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(prev);
+                      localMap.forEach((v, k) => {
+                           if (!newMap.has(k)) newMap.set(k, v);
+                      });
+                      return newMap;
+                  });
+              }
+          }
+      } catch (e) {
+          console.error("Error loading localStorage", e);
+      }
+  }, [albumId]);
+
   // --- KẾT HỢP DỮ LIỆU ---
   // Merge dữ liệu từ Drive và Firestore mỗi khi có thay đổi
   const photos = useMemo(() => {
@@ -68,6 +97,19 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       });
   }, [drivePhotos, photoStates]);
 
+  // Helper to sync state to LocalStorage
+  const syncToLocalStorage = (currentMap: Map<string, {isSelected: boolean, isFavorite: boolean}>) => {
+      try {
+          const arrayData = Array.from(currentMap.entries()).map(([key, value]) => ({
+              photoId: key,
+              ...value
+          }));
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(arrayData));
+      } catch (e) {
+          console.error("Failed to save to localStorage", e);
+      }
+  };
+
   // --- LỌC DỮ LIỆU THEO CHẾ ĐỘ XEM ---
   const filteredPhotos = useMemo(() => {
       if (filterMode === 'selected') return photos.filter(p => p.isSelected);
@@ -78,7 +120,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const selectedCount = useMemo(() => photos.filter(p => p.isSelected).length, [photos]);
   const favoriteCount = useMemo(() => photos.filter(p => p.isFavorite).length, [photos]);
 
-  // 1. Fetch Basic Photo Data from Google Drive
+  // 2. Fetch Basic Photo Data from Google Drive
   useEffect(() => {
     const fetchPhotos = async () => {
       setLoading(true);
@@ -167,19 +209,27 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     }
   }, [albumId]);
 
-  // 2. Firestore Listener: Sync Selections & Favorites Real-time
-  // Độc lập hoàn toàn với việc load ảnh từ Drive
+  // 3. Firestore Listener: Sync Selections & Favorites Real-time
+  // Logic: Khi có dữ liệu mới từ Firestore, merge với dữ liệu hiện tại
   useEffect(() => {
       if (!albumId) return;
 
       const q = query(collection(db, "album_photo_states"), where("albumId", "==", albumId));
 
       const unsubscribe = onSnapshot(q, (snapshot) => {
-          const newStateMap = new Map();
-          snapshot.forEach((doc) => {
-              newStateMap.set(doc.data().photoId, doc.data());
+          setPhotoStates(prev => {
+             const nextMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(prev);
+             snapshot.forEach((doc) => {
+                 const data = doc.data();
+                 nextMap.set(data.photoId, {
+                     isSelected: data.isSelected || false,
+                     isFavorite: data.isFavorite || false
+                 });
+             });
+             // Also update local storage with the freshest data from server
+             syncToLocalStorage(nextMap);
+             return nextMap;
           });
-          setPhotoStates(newStateMap);
       });
 
       return () => unsubscribe();
@@ -276,9 +326,12 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     const newState = !photo.isFavorite;
     const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     
-    const tempMap = new Map(photoStates);
+    const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(photoStates);
     tempMap.set(id, { ...currentState, isFavorite: newState });
     setPhotoStates(tempMap);
+    
+    // Backup to LocalStorage immediately
+    syncToLocalStorage(tempMap);
 
     const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
     
@@ -286,16 +339,15 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            isFavorite: newState
+            isFavorite: newState,
+            updatedAt: Timestamp.now(),
+            updatedBy: auth.currentUser?.uid || 'anonymous'
         }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu trạng thái tim:", e);
-        // Revert UI if fail
-        tempMap.set(id, { ...currentState, isFavorite: !newState });
-        setPhotoStates(new Map(tempMap));
-        if (e.code === 'permission-denied') {
-            alert("Lỗi: Bạn không có quyền thực hiện hành động này. Vui lòng tải lại trang.");
-        }
+        // Note: We do NOT revert UI here if using LocalStorage strategy, 
+        // to prevent data loss feeling. We keep the local state.
+        // Sync warning only.
     }
   };
 
@@ -313,9 +365,12 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     const newState = !photo.isSelected;
     const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     
-    const tempMap = new Map(photoStates);
+    const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(photoStates);
     tempMap.set(id, { ...currentState, isSelected: newState });
     setPhotoStates(tempMap);
+
+    // Backup to LocalStorage immediately
+    syncToLocalStorage(tempMap);
 
     const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
 
@@ -323,16 +378,13 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            isSelected: newState
+            isSelected: newState,
+            updatedAt: Timestamp.now(),
+            updatedBy: auth.currentUser?.uid || 'anonymous'
         }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu trạng thái chọn:", e);
-        // Revert UI
-        tempMap.set(id, { ...currentState, isSelected: !newState });
-        setPhotoStates(new Map(tempMap));
-        if (e.code === 'permission-denied') {
-            alert("Lỗi: Không thể lưu lựa chọn. Vui lòng kiểm tra kết nối mạng hoặc tải lại trang.");
-        }
+        // Do NOT revert UI to keep user happy. It is saved in LocalStorage.
     }
   };
 
