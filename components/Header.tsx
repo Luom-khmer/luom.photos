@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, LogIn, Copy, Globe, LogOut, User as UserIcon, Facebook, Shield } from 'lucide-react';
+import { Home, LogIn, Copy, Globe, LogOut, User as UserIcon, Facebook } from 'lucide-react';
 import { User } from 'firebase/auth';
 
 interface HeaderProps {
@@ -16,6 +16,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
   };
 
   // Logic kiểm tra hiển thị: Chỉ hiện thông tin user nếu KHÔNG PHẢI là ẩn danh
+  // Nếu là ẩn danh (Khách), biến này sẽ false -> Hiển thị nút Đăng nhập như bình thường
   const isRealUser = user && !user.isAnonymous;
 
   return (
@@ -73,26 +74,17 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
                 </button>
               </li>
             ) : (
-              // Đối với khách hàng (Ẩn danh hoặc chưa đăng nhập), hiện nút Đăng nhập cho Admin
-              // Hoặc hiện Badge "Khách" để biết là đang kết nối an toàn
+              // Trạng thái: Chưa đăng nhập hoặc Đang là Khách (Ẩn danh)
+              // Hiển thị nút Đăng Nhập bình thường để Admin có thể login
+              // Khách hàng sẽ thấy nút này như trang web bình thường, nhưng hệ thống bên dưới vẫn đang chạy ngầm
               <li>
                  <button 
                   onClick={onLogin} 
                   className="flex items-center hover:text-yellow-300 transition-colors"
                   title="Admin đăng nhập"
                 >
-                  {user?.isAnonymous ? (
-                     // Đã có kết nối ẩn danh chạy ngầm
-                     <span className="flex items-center text-green-200 bg-green-900/30 px-2 py-0.5 rounded text-xs border border-green-800">
-                        <Shield className="w-3 h-3 mr-1" /> Khách
-                     </span>
-                  ) : (
-                     // Chưa kết nối gì cả
-                     <>
-                        <LogIn className="w-4 h-4 mr-1" />
-                        Đăng Nhập
-                     </>
-                  )}
+                  <LogIn className="w-4 h-4 mr-1" />
+                  Đăng Nhập
                 </button>
               </li>
             )}
