@@ -241,40 +241,21 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    // 1. KIỂM TRA GIỚI HẠN KHÁCH (GUEST LIMIT CHECK)
-    if (!isRealUser) {
-        const currentCount = parseInt(localStorage.getItem('guest_album_count') || '0', 10);
-        if (currentCount >= 3) {
-            alert("Bạn đã hết 3 lượt tạo miễn phí.\n\nVui lòng đăng nhập bằng Google để tiếp tục tạo album không giới hạn!");
-            return;
-        }
-    }
-
     if (status === 'success' && folderMetadata) {
       const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://luomphotos.com';
       const baseUrl = currentUrl.split('?')[0].split('#')[0];
       
-      // TẠO URL CHUẨN (Không còn tham số &ref=... ngẫu nhiên)
-      // Điều này giúp 1 link có thể gửi cho nhiều người
+      // TẠO URL CHUẨN
       let finalUrl = `${baseUrl}#?album=${folderMetadata.id}`;
       
-      // Tham số Limit
       if (limitPhotos && maxPhotoCount > 0) {
           finalUrl += `&limit=${maxPhotoCount}`;
       }
 
-      // Tham số Comments
       if (allowComment) {
           finalUrl += `&comments=1`;
       }
       
-      // 2. CẬP NHẬT SỐ LƯỢT CỦA KHÁCH
-      if (!isRealUser) {
-          const newCount = (parseInt(localStorage.getItem('guest_album_count') || '0', 10) + 1);
-          localStorage.setItem('guest_album_count', newCount.toString());
-          setGuestCount(newCount);
-      }
-
       setCreatedLink(finalUrl);
     } else {
       if (status === 'error') {
@@ -362,7 +343,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                         {isBlobUrl ? (
                             <span className="text-amber-600 font-medium">Lưu ý: Bạn đang chạy trên môi trường xem trước (Blob). Link này chỉ hoạt động trên tab hiện tại.</span>
                         ) : (
-                            <span>Khách hàng truy cập link này để chọn ảnh. {password && 'Yêu cầu mật khẩu khi truy cập.'}</span>
+                            <span>Khách hàng truy cập link này để chọn ảnh. Chế độ: <strong>Công Khai (Mọi người cùng thấy)</strong>.</span>
                         )}
                     </p>
                 </div>
@@ -766,14 +747,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                 </>
               )}
             </button>
-            
-            {/* Guest Limit Hint */}
-            {!isRealUser && (
-                <div className="mt-3 flex items-center text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full border border-gray-200">
-                    <Lock className="w-3 h-3 mr-1 text-gray-400" />
-                    <span>Miễn phí: {Math.max(0, 3 - guestCount)}/3 lượt tạo</span>
-                </div>
-            )}
           </div>
 
           {/* Info Alert */}
