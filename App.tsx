@@ -100,8 +100,13 @@ const App: React.FC = () => {
         // Điều này giúp khách vẫn có thể Tim/Chọn ảnh nếu Rules yêu cầu "auth != null"
         try {
             await signInAnonymously(auth);
-        } catch (error) {
-            console.error("Lỗi đăng nhập ẩn danh cho khách:", error);
+        } catch (error: any) {
+            // Fix lỗi "auth/admin-restricted-operation": Xảy ra khi chưa bật Anonymous Provider trong Console
+            if (error.code === 'auth/admin-restricted-operation') {
+                console.warn("⚠️ Warning: Tính năng đăng nhập ẩn danh chưa được bật trong Firebase Console.");
+            } else {
+                console.error("Lỗi đăng nhập ẩn danh cho khách:", error);
+            }
             setCurrentUser(null);
         }
       }
