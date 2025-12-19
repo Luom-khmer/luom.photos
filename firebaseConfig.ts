@@ -1,5 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyDdk8nZCyJUi5yYnk2IlUqGc0nmf65Fmvk",
@@ -14,7 +15,15 @@ const firebaseConfig = {
 // Khởi tạo Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+const db = getFirestore(app); // Khởi tạo Firestore Database
 const googleProvider = new GoogleAuthProvider();
+
+// DANH SÁCH SUPER ADMIN (Cố định, có quyền xóa/thêm người khác)
+export const ADMIN_EMAILS = [
+    "1touch.pro.vn@gmail.com",
+    "admin@gmail.com",
+    "danhluom68g1@gmail.com"
+];
 
 // Hàm đăng nhập Google
 export const loginWithGoogle = async () => {
@@ -45,4 +54,4 @@ export const logoutUser = async () => {
   }
 };
 
-export { auth };
+export { auth, db };

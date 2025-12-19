@@ -1,26 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw, Shield, Users } from 'lucide-react';
+import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw, Shield, Users, Trash2, UserPlus } from 'lucide-react';
 import { Switch } from './ui/Switch';
 import { User } from 'firebase/auth';
+import { db, ADMIN_EMAILS } from '../firebaseConfig';
+import { collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 
 interface CreateAlbumFormProps {
   user: User | null;
 }
 
-// --- CẤU HÌNH DANH SÁCH ADMIN ---
-// Tôi đã thêm sẵn email của bạn vào đây.
-// Chỉ những email trong danh sách này mới thấy nút cài đặt API Key.
-const ADMIN_EMAILS = [
-    "1touch.pro.vn@gmail.com",
-    "admin@gmail.com",
-    "danhluom68g1@gmail.com"
-];
-
 export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [driveLink, setDriveLink] = useState('');
   const [password, setPassword] = useState('');
   
-  // Logic xác định quyền Admin: Phải đăng nhập VÀ email nằm trong danh sách cho phép
+  // Logic xác định quyền Admin: Phải đăng nhập VÀ email nằm trong danh sách cho phép cố định
   const isAdmin = user && user.email && ADMIN_EMAILS.includes(user.email);
 
   // API Key State
@@ -34,6 +27,11 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+
+  // User Management State (Only for Admin)
+  const [allowedUsers, setAllowedUsers] = useState<{email: string, addedAt: any}[]>([]);
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [loadingUsers, setLoadingUsers] = useState(false);
 
   // Toggle states
   const [allowDownload, setAllowDownload] = useState(false);
@@ -64,6 +62,59 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
         checkDriveLink(driveLink);
     }
   }, [apiKey]);
+
+  // Realtime Listener for Allowed Users (Only fetch if Admin and Settings Open)
+  useEffect(() => {
+    if (isAdmin && showSettings) {
+        setLoadingUsers(true);
+        const q = query(collection(db, "allowed_users"));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const users: any[] = [];
+            snapshot.forEach((doc) => {
+                users.push(doc.data());
+            });
+            // Sort client side (optional) or use orderBy if index exists
+            users.sort((a, b) => (b.addedAt?.seconds || 0) - (a.addedAt?.seconds || 0));
+            setAllowedUsers(users);
+            setLoadingUsers(false);
+        }, (error) => {
+            console.error("Lỗi tải danh sách người dùng:", error);
+            setLoadingUsers(false);
+        });
+        return () => unsubscribe();
+    }
+  }, [isAdmin, showSettings]);
+
+  // Add User Logic
+  const handleAddUser = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newUserEmail || !newUserEmail.includes('@')) {
+          alert("Email không hợp lệ");
+          return;
+      }
+      try {
+          await setDoc(doc(db, "allowed_users", newUserEmail), {
+              email: newUserEmail,
+              addedAt: new Date()
+          });
+          setNewUserEmail('');
+      } catch (error) {
+          console.error("Lỗi thêm user:", error);
+          alert("Không thể thêm người dùng. Kiểm tra kết nối Firestore.");
+      }
+  };
+
+  // Remove User Logic
+  const handleRemoveUser = async (emailToRemove: string) => {
+      if (window.confirm(`Bạn có chắc muốn chặn quyền truy cập của ${emailToRemove}?`)) {
+          try {
+              await deleteDoc(doc(db, "allowed_users", emailToRemove));
+          } catch (error) {
+              console.error("Lỗi xóa user:", error);
+              alert("Không thể xóa người dùng.");
+          }
+      }
+  };
 
   const checkDriveLink = async (url: string) => {
     const driveRegex = /(?:https?:\/\/)?(?:drive|docs)\.google\.com\/(?:drive\/folders\/|open\?id=)([-\w]+)/;
@@ -297,10 +348,10 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             )}
         </div>
 
-        {/* API Key Settings Panel - Only for Admin */}
+        {/* API Key & User Management Panel - Only for Admin */}
         {isAdmin && showSettings && (
-            <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg animate-in fade-in slide-in-from-top-2 relative">
-                <div className="flex justify-between items-center mb-2">
+            <div className="mb-6 bg-gray-50 border border-gray-200 rounded-lg animate-in fade-in slide-in-from-top-2 relative overflow-hidden">
+                <div className="flex justify-between items-center p-3 bg-gray-100/50 border-b border-gray-200">
                     <div className="flex items-center gap-2">
                          <div className="bg-red-100 p-1 rounded text-red-600">
                             <Shield className="w-4 h-4" />
@@ -312,37 +363,93 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                     <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4"/></button>
                 </div>
 
-                {/* Admin User Info */}
-                <div className="mb-4 text-xs text-gray-500 border-b border-gray-200 pb-2">
-                    <div className="flex items-center">
-                        <Users className="w-3 h-3 mr-1" />
-                        Quản trị viên đang đăng nhập: <strong className="ml-1 text-gray-700">{user?.email}</strong>
+                <div className="p-4 space-y-6">
+                    {/* Admin User Info */}
+                    <div className="text-xs text-gray-500 pb-2 border-b border-gray-200">
+                        <div className="flex items-center">
+                            <Users className="w-3 h-3 mr-1" />
+                            Admin đang đăng nhập: <strong className="ml-1 text-gray-700">{user?.email}</strong>
+                        </div>
                     </div>
-                </div>
 
-                <div className="mb-2">
-                    <label className="text-xs font-bold text-gray-600 uppercase flex items-center mb-1">
-                        Google API Key
-                        <button 
-                            onClick={(e) => { e.preventDefault(); setShowGuide(true); }}
-                            className="ml-2 text-blue-600 hover:text-blue-800 text-[10px] normal-case flex items-center font-normal"
-                        >
-                            <HelpCircle className="w-3 h-3 mr-0.5" />
-                            Cách lấy Key?
-                        </button>
-                    </label>
-                    <div className="relative">
-                        <input 
-                            type="text" 
-                            value={apiKey}
-                            onChange={(e) => setApiKey(e.target.value)}
-                            placeholder="AIza..."
-                            className="w-full text-sm border border-gray-300 rounded p-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none pr-8 font-mono"
-                        />
+                    {/* SECTION 1: GOOGLE API KEY */}
+                    <div>
+                        <label className="text-xs font-bold text-gray-600 uppercase flex items-center mb-1">
+                            Google API Key
+                            <button 
+                                onClick={(e) => { e.preventDefault(); setShowGuide(true); }}
+                                className="ml-2 text-blue-600 hover:text-blue-800 text-[10px] normal-case flex items-center font-normal"
+                            >
+                                <HelpCircle className="w-3 h-3 mr-0.5" />
+                                Cách lấy Key?
+                            </button>
+                        </label>
+                        <div className="relative">
+                            <input 
+                                type="text" 
+                                value={apiKey}
+                                onChange={(e) => setApiKey(e.target.value)}
+                                placeholder="AIza..."
+                                className="w-full text-sm border border-gray-300 rounded p-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none pr-8 font-mono"
+                            />
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-1">
+                        API Key này sẽ được dùng cho toàn bộ hệ thống trên trình duyệt này.
+                        </p>
                     </div>
-                    <p className="text-[10px] text-gray-500 mt-1">
-                       API Key này sẽ được dùng cho toàn bộ hệ thống trên trình duyệt này.
-                    </p>
+
+                    {/* SECTION 2: USER MANAGEMENT (ALLOWLIST) */}
+                    <div className="pt-2 border-t border-gray-200">
+                        <label className="text-xs font-bold text-gray-600 uppercase flex items-center mb-2">
+                            <Users className="w-3.5 h-3.5 mr-1" />
+                            Quản lý người dùng (Allowlist)
+                        </label>
+                        <p className="text-[10px] text-gray-500 mb-3">
+                            Chỉ những email dưới đây mới được phép đăng nhập vào hệ thống. Xóa email để chặn quyền truy cập.
+                        </p>
+
+                        {/* Add User Form */}
+                        <form onSubmit={handleAddUser} className="flex gap-2 mb-3">
+                            <input 
+                                type="email" 
+                                value={newUserEmail}
+                                onChange={(e) => setNewUserEmail(e.target.value)}
+                                placeholder="Nhập email người dùng..." 
+                                className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 focus:ring-1 focus:ring-green-500 outline-none"
+                            />
+                            <button 
+                                type="submit"
+                                className="bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700 flex items-center"
+                                disabled={!newUserEmail}
+                            >
+                                <UserPlus className="w-3.5 h-3.5 mr-1" /> Thêm
+                            </button>
+                        </form>
+
+                        {/* User List */}
+                        <div className="bg-white border border-gray-200 rounded max-h-40 overflow-y-auto custom-scrollbar">
+                            {loadingUsers ? (
+                                <div className="p-3 text-center text-xs text-gray-400">Đang tải danh sách...</div>
+                            ) : allowedUsers.length === 0 ? (
+                                <div className="p-3 text-center text-xs text-gray-400">Chưa có người dùng nào được thêm.</div>
+                            ) : (
+                                <ul className="divide-y divide-gray-100">
+                                    {allowedUsers.map((u) => (
+                                        <li key={u.email} className="px-3 py-2 flex justify-between items-center hover:bg-gray-50 text-sm">
+                                            <span className="text-gray-700 truncate mr-2">{u.email}</span>
+                                            <button 
+                                                onClick={() => handleRemoveUser(u.email)}
+                                                className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors"
+                                                title="Xóa quyền truy cập"
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    </div>
                 </div>
             </div>
         )}

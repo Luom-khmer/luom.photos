@@ -3,8 +3,9 @@ import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { CreateAlbumForm } from './components/CreateAlbumForm';
 import { AlbumView } from './components/AlbumView';
-import { auth, loginWithGoogle, logoutUser } from './firebaseConfig';
+import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
 import { onAuthStateChanged, User } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
   const [albumId, setAlbumId] = useState<string | null>(null);
@@ -46,9 +47,38 @@ const App: React.FC = () => {
     window.addEventListener('popstate', handleUrlChange);
     window.addEventListener('hashchange', handleUrlChange);
 
-    // 2. Firebase Auth Listener
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
+    // 2. Firebase Auth Listener with Security Check
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        const email = user.email || '';
+        
+        // 2a. Nếu là Super Admin (Hardcoded) -> Cho phép
+        if (ADMIN_EMAILS.includes(email)) {
+             setCurrentUser(user);
+             return;
+        }
+
+        // 2b. Nếu không phải Admin, kiểm tra trong Firestore (Allowlist)
+        try {
+            const userDocRef = doc(db, 'allowed_users', email);
+            const userDoc = await getDoc(userDocRef);
+
+            if (userDoc.exists()) {
+                setCurrentUser(user);
+            } else {
+                // Không có trong danh sách -> Kick out
+                await logoutUser();
+                alert(`Tài khoản "${email}" chưa được cấp quyền sử dụng hệ thống. Vui lòng liên hệ Admin.`);
+            }
+        } catch (error) {
+            console.error("Lỗi kiểm tra quyền truy cập:", error);
+            // Fallback an toàn: Nếu lỗi DB, không cho đăng nhập để bảo mật
+            await logoutUser();
+            alert("Không thể kết nối đến hệ thống phân quyền. Vui lòng thử lại sau.");
+        }
+      } else {
+        setCurrentUser(null);
+      }
     });
 
     return () => {
@@ -63,7 +93,7 @@ const App: React.FC = () => {
     try {
       await loginWithGoogle();
     } catch (error) {
-      alert("Đăng nhập thất bại. Vui lòng kiểm tra console hoặc cấu hình Firebase.");
+      // Alert đã được xử lý trong loginWithGoogle
     }
   };
 
