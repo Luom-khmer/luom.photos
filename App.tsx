@@ -83,7 +83,7 @@ const App: React.FC = () => {
         {albumId ? (
           <AlbumView albumId={albumId} />
         ) : (
-          <CreateAlbumForm />
+          <CreateAlbumForm user={currentUser} />
         )}
       </main>
 

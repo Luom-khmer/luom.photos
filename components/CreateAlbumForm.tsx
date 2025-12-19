@@ -1,11 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw } from 'lucide-react';
 import { Switch } from './ui/Switch';
+import { User } from 'firebase/auth';
 
-export const CreateAlbumForm: React.FC = () => {
+interface CreateAlbumFormProps {
+  user: User | null;
+}
+
+export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [driveLink, setDriveLink] = useState('');
   const [password, setPassword] = useState('');
   
+  // Logic xác định quyền Admin: Chỉ cần đăng nhập là được coi là Admin quản lý
+  const isAdmin = !!user;
+
   // API Key State
   const [apiKey, setApiKey] = useState(() => {
     const defaultKey = 'AIzaSyD0swN9M4-VzVfA0h0mMTb3OSmD8CAcH1c';
@@ -69,7 +77,10 @@ export const CreateAlbumForm: React.FC = () => {
 
     if (!apiKey) {
         setStatus('error');
-        setErrorMessage('Yêu cầu Google API Key để kiểm tra link thật. Vui lòng nhấn vào icon bánh răng để cài đặt.');
+        setErrorMessage(isAdmin 
+            ? 'Yêu cầu Google API Key. Vui lòng nhấn vào icon bánh răng để cài đặt.'
+            : 'Hệ thống chưa cấu hình API Key. Vui lòng liên hệ Admin.'
+        );
         setFolderMetadata(null);
         return;
     }
@@ -142,8 +153,12 @@ export const CreateAlbumForm: React.FC = () => {
       if (status === 'error') {
         alert(errorMessage || 'Vui lòng kiểm tra lại đường dẫn.');
       } else if (!apiKey) {
-        setShowSettings(true);
-        alert('Vui lòng nhập Google API Key để tiếp tục.');
+        if (isAdmin) {
+            setShowSettings(true);
+            alert('Vui lòng nhập Google API Key để tiếp tục.');
+        } else {
+            alert('Hệ thống thiếu API Key. Vui lòng đăng nhập quyền Admin để cấu hình.');
+        }
       } else {
          alert('Vui lòng nhập đường dẫn thư mục Google Drive hợp lệ.');
       }
@@ -261,17 +276,20 @@ export const CreateAlbumForm: React.FC = () => {
             <h2 className="text-2xl md:text-3xl font-light text-center text-gray-700 tracking-wide uppercase flex-1">
             Bắt Đầu Tạo Album Ảnh
             </h2>
-            <button 
-                onClick={() => setShowSettings(!showSettings)}
-                className="text-gray-400 hover:text-gray-700 transition-colors p-1"
-                title="Cài đặt API Key"
-            >
-                <Settings className={`w-5 h-5 ${!apiKey ? 'text-red-400 animate-pulse' : ''}`} />
-            </button>
+            {/* ONLY SHOW SETTINGS IF ADMIN (LOGGED IN) */}
+            {isAdmin && (
+                <button 
+                    onClick={() => setShowSettings(!showSettings)}
+                    className="text-gray-400 hover:text-gray-700 transition-colors p-1"
+                    title="Cài đặt API Key (Admin Only)"
+                >
+                    <Settings className={`w-5 h-5 ${!apiKey ? 'text-red-400 animate-pulse' : ''}`} />
+                </button>
+            )}
         </div>
 
-        {/* API Key Settings Panel */}
-        {showSettings && (
+        {/* API Key Settings Panel - Only for Admin */}
+        {isAdmin && showSettings && (
             <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg animate-in fade-in slide-in-from-top-2 relative">
                 <div className="flex justify-between items-center mb-2">
                     <label className="text-xs font-bold text-gray-600 uppercase flex items-center">
@@ -358,9 +376,11 @@ export const CreateAlbumForm: React.FC = () => {
                  Link Google Drive
                  <span className="block text-xs text-gray-500 font-normal mt-0.5">Hỗ trợ link từ thư mục Google Drive, có thể đọc file từ ảnh Drive công khai</span>
                </label>
-               <a href="#" onClick={(e) => { e.preventDefault(); setShowGuide(true); }} className="text-blue-600 hover:text-blue-800 hover:underline text-xs flex-shrink-0 flex items-center">
-                 Xem hướng dẫn <ExternalLink className="w-3 h-3 ml-1" />
-               </a>
+               {isAdmin && (
+                   <a href="#" onClick={(e) => { e.preventDefault(); setShowGuide(true); }} className="text-blue-600 hover:text-blue-800 hover:underline text-xs flex-shrink-0 flex items-center">
+                     Xem hướng dẫn <ExternalLink className="w-3 h-3 ml-1" />
+                   </a>
+               )}
             </div>
             <div className="relative group">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
