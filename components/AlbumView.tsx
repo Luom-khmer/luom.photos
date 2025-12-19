@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle } from 'lucide-react';
+import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User } from 'lucide-react';
+import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp } from 'firebase/firestore';
+import { db, auth } from '../firebaseConfig';
 
 interface AlbumViewProps {
   albumId: string;
@@ -11,6 +13,16 @@ interface Photo {
   name: string;
   isFavorite: boolean;
   isSelected: boolean;
+}
+
+interface Comment {
+    id: string;
+    text: string;
+    userName: string;
+    userAvatar?: string;
+    createdAt: any;
+    photoId: string;
+    albumId: string;
 }
 
 // Helper to save state
@@ -34,11 +46,19 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const [albumName, setAlbumName] = useState('Đang tải...');
   const [selectedCount, setSelectedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [maxSelection, setMaxSelection] = useState<number | null>(null);
+  
+  // Comment State
+  const [allowComments, setAllowComments] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [newComment, setNewComment] = useState('');
   
   // Lightbox State
   const [lightboxIndex, setLightboxIndex] = useState<number>(-1);
   const [isZoomed, setIsZoomed] = useState(false);
   const filmstripRef = useRef<HTMLDivElement>(null);
+  const commentsEndRef = useRef<HTMLDivElement>(null);
 
   // Swipe gesture refs
   const touchStartX = useRef<number>(0);
@@ -50,8 +70,31 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       setLoading(true);
       setError(null);
       
+      // Parse params from URL
+      try {
+        const currentHash = window.location.hash;
+        const searchParams = new URLSearchParams(currentHash.split('?')[1] || window.location.search);
+        
+        // Limit Param
+        const limitParam = searchParams.get('limit');
+        if (limitParam) {
+             const parsedLimit = parseInt(limitParam, 10);
+             if (!isNaN(parsedLimit) && parsedLimit > 0) {
+                 setMaxSelection(parsedLimit);
+             }
+        }
+
+        // Comment Param
+        const commentsParam = searchParams.get('comments');
+        if (commentsParam === '1' || commentsParam === 'true') {
+            setAllowComments(true);
+        }
+
+      } catch (e) {
+          console.error("Lỗi đọc tham số URL:", e);
+      }
+      
       // Try to get key from storage, otherwise use default fallback
-      // IMPORTANT: Using a shared default key allows shared links to work for guests
       let apiKey = localStorage.getItem('google_api_key');
       if (!apiKey) {
           apiKey = 'AIzaSyD0swN9M4-VzVfA0h0mMTb3OSmD8CAcH1c';
@@ -136,6 +179,34 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     }
   }, [albumId]);
 
+  // Firestore Realtime Comments Listener
+  useEffect(() => {
+      if (!allowComments || lightboxIndex === -1 || !showComments) return;
+      
+      const currentPhotoId = photos[lightboxIndex]?.id;
+      if (!currentPhotoId) return;
+
+      const q = query(
+          collection(db, "album_comments"),
+          where("photoId", "==", currentPhotoId),
+          orderBy("createdAt", "asc")
+      );
+
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+          const loadedComments: Comment[] = [];
+          snapshot.forEach((doc) => {
+              loadedComments.push({ id: doc.id, ...doc.data() } as Comment);
+          });
+          setComments(loadedComments);
+          // Scroll to bottom
+          setTimeout(() => {
+            commentsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+      });
+
+      return () => unsubscribe();
+  }, [allowComments, lightboxIndex, showComments, photos]);
+
   // Reset zoom when changing photos
   useEffect(() => {
     setIsZoomed(false);
@@ -157,6 +228,9 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     const handleKeyDown = (e: KeyboardEvent) => {
         if (lightboxIndex === -1) return;
         
+        // Disable keyboard nav if user is typing in comment input
+        if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+
         switch(e.key) {
             case 'ArrowLeft':
                 prevPhoto();
@@ -166,6 +240,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 break;
             case 'Escape':
                 setLightboxIndex(-1);
+                setShowComments(false);
                 break;
             case ' ': // Space to select/deselect
                 e.preventDefault();
@@ -197,6 +272,13 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   };
 
   const toggleSelect = (id: string) => {
+    // Check limit BEFORE mapping to avoid complex rollback
+    const photoToToggle = photos.find(p => p.id === id);
+    if (photoToToggle && !photoToToggle.isSelected && maxSelection !== null && selectedCount >= maxSelection) {
+         alert(`Album này giới hạn chỉ được chọn tối đa ${maxSelection} ảnh.`);
+         return;
+    }
+
     let newCount = selectedCount;
     const newPhotos = photos.map(p => {
         if (p.id === id) {
@@ -249,6 +331,31 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const toggleZoom = (e?: React.MouseEvent) => {
       e?.stopPropagation();
       setIsZoomed(!isZoomed);
+  };
+
+  const handleAddComment = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newComment.trim()) return;
+
+      const user = auth.currentUser;
+      const userName = user?.displayName || user?.email?.split('@')[0] || "Khách";
+      const userAvatar = user?.photoURL || "";
+
+      try {
+          await addDoc(collection(db, "album_comments"), {
+              albumId: albumId,
+              photoId: photos[lightboxIndex].id,
+              text: newComment.trim(),
+              userName: userName,
+              userAvatar: userAvatar,
+              createdAt: Timestamp.now(),
+              userId: user?.uid || "guest"
+          });
+          setNewComment("");
+      } catch (e) {
+          console.error("Lỗi gửi bình luận:", e);
+          alert("Không thể gửi bình luận.");
+      }
   };
 
   // Swipe Handlers
@@ -312,6 +419,11 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       <div className="bg-[#2e7d32] text-white py-3 px-6 text-center shadow-md relative z-20 border-b-4 border-[#1b5e20]">
         <h1 className="text-xl md:text-2xl font-medium tracking-wide uppercase shadow-black drop-shadow-md">
             {albumName} ({photos.length} ảnh)
+            {maxSelection !== null && (
+                <span className="block text-sm font-normal text-yellow-300 mt-1 bg-black/20 rounded-full py-0.5 px-3 w-fit mx-auto">
+                    Đang giới hạn chọn tối đa: {maxSelection} ảnh
+                </span>
+            )}
         </h1>
       </div>
 
@@ -401,7 +513,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                         {isZoomed ? <ZoomOut className="w-6 h-6" /> : <ZoomIn className="w-6 h-6" />}
                     </button>
                     <button 
-                        onClick={() => setLightboxIndex(-1)}
+                        onClick={() => { setLightboxIndex(-1); setShowComments(false); }}
                         className="text-[#4CAF50] hover:text-green-400 transition-transform hover:scale-110 p-2 bg-black/20 rounded-full"
                     >
                         <X className="w-8 h-8" />
@@ -416,8 +528,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 onTouchMove={onTouchMove}
                 onTouchEnd={onTouchEnd}
             >
-                {/* Controls Layer: Arrows & FABs - Positioned absolutely so they stay in place */}
-                
                 {/* Navigation Arrows */}
                 <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-between px-2 md:px-4">
                     <button 
@@ -464,11 +574,92 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                          <Download className="w-6 h-6" />
                      </button>
 
-                     {/* Message (Optional) */}
-                     <button className="w-12 h-12 bg-[#5d4037] rounded-full flex items-center justify-center text-white shadow-xl hover:bg-[#4e342e] border-2 border-[#8d6e63] transition-all hover:scale-110">
-                         <MessageCircle className="w-6 h-6" />
-                     </button>
+                     {/* Message (Updated) */}
+                     {allowComments && (
+                         <button 
+                            onClick={(e) => { e.stopPropagation(); setShowComments(!showComments); }}
+                            className={`w-12 h-12 rounded-full flex items-center justify-center text-white shadow-xl transition-all hover:scale-110 border-2 ${showComments ? 'bg-[#5d4037] border-white' : 'bg-[#5d4037] border-[#8d6e63]'}`}
+                         >
+                            <MessageCircle className="w-6 h-6" />
+                         </button>
+                     )}
                 </div>
+
+                {/* COMMENTS SIDEBAR / OVERLAY */}
+                {showComments && (
+                    <div 
+                        className="absolute inset-y-0 right-0 w-full md:w-96 bg-white/95 backdrop-blur-md shadow-2xl z-40 flex flex-col animate-in slide-in-from-right duration-300 pointer-events-auto"
+                        onClick={(e) => e.stopPropagation()} 
+                    >
+                        {/* Header */}
+                        <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+                            <h3 className="font-bold text-gray-700 flex items-center">
+                                <MessageCircle className="w-4 h-4 mr-2" />
+                                Bình Luận
+                            </h3>
+                            <button 
+                                onClick={() => setShowComments(false)}
+                                className="text-gray-400 hover:text-gray-600 p-1"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* List */}
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            {comments.length === 0 ? (
+                                <div className="text-center text-gray-400 py-10 text-sm">
+                                    Chưa có bình luận nào.<br/>Hãy là người đầu tiên!
+                                </div>
+                            ) : (
+                                comments.map((comment) => (
+                                    <div key={comment.id} className="flex items-start space-x-2">
+                                        <div className="flex-shrink-0">
+                                            {comment.userAvatar ? (
+                                                <img src={comment.userAvatar} alt="" className="w-8 h-8 rounded-full border border-gray-200" />
+                                            ) : (
+                                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                                                    <User className="w-4 h-4" />
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="bg-gray-100 rounded-lg p-2.5 flex-1 text-sm">
+                                            <div className="flex justify-between items-baseline mb-0.5">
+                                                <strong className="text-gray-800 text-xs">{comment.userName}</strong>
+                                                <span className="text-[10px] text-gray-400 ml-2">
+                                                    {comment.createdAt?.seconds ? new Date(comment.createdAt.seconds * 1000).toLocaleString('vi-VN', {hour: '2-digit', minute:'2-digit', day:'2-digit', month:'2-digit'}) : ''}
+                                                </span>
+                                            </div>
+                                            <p className="text-gray-700 break-words">{comment.text}</p>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                            <div ref={commentsEndRef} />
+                        </div>
+
+                        {/* Input */}
+                        <div className="p-3 border-t border-gray-200 bg-white">
+                            <form onSubmit={handleAddComment} className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={newComment}
+                                    onChange={(e) => setNewComment(e.target.value)}
+                                    placeholder="Viết bình luận..."
+                                    className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:ring-2 focus:ring-green-500 outline-none"
+                                    onKeyDown={(e) => e.stopPropagation()} 
+                                />
+                                <button 
+                                    type="submit"
+                                    className="bg-green-600 text-white p-2 rounded-full hover:bg-green-700 transition-colors flex-shrink-0"
+                                    disabled={!newComment.trim()}
+                                >
+                                    <Send className="w-4 h-4" />
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                )}
 
                 {/* The Image Scrollable Wrapper */}
                 <div 
@@ -556,8 +747,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
 
              {/* 4. Counter (Red Diamond Shape) */}
              <div className="pt-1">
-                <button className="w-10 h-10 md:w-11 md:h-11 bg-[#FF0000] text-white shadow-xl flex items-center justify-center transform rotate-45 hover:scale-110 transition-transform cursor-default border-2 border-white">
-                    <span className="transform -rotate-45 font-bold text-sm md:text-base">{selectedCount}</span>
+                <button className={`w-10 h-10 md:w-11 md:h-11 text-white shadow-xl flex items-center justify-center transform rotate-45 hover:scale-110 transition-transform cursor-default border-2 border-white ${maxSelection !== null && selectedCount >= maxSelection ? 'bg-gray-500' : 'bg-[#FF0000]'}`}>
+                    <span className="transform -rotate-45 font-bold text-sm md:text-base">
+                        {selectedCount}{maxSelection ? `/${maxSelection}` : ''}
+                    </span>
                 </button>
              </div>
         </div>

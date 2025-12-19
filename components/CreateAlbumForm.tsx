@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw, Shield, Users, Trash2, UserPlus, History } from 'lucide-react';
+import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw, Shield, Users, Trash2, UserPlus, History, Lock } from 'lucide-react';
 import { Switch } from './ui/Switch';
 import { User } from 'firebase/auth';
 import { db, ADMIN_EMAILS } from '../firebaseConfig';
@@ -53,10 +53,17 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [isCopied, setIsCopied] = useState(false);
   const [isBlobUrl, setIsBlobUrl] = useState(false);
 
+  // Guest limit state
+  const [guestCount, setGuestCount] = useState(0);
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
         localStorage.setItem('google_api_key', apiKey);
         setIsBlobUrl(window.location.protocol === 'blob:');
+        
+        // Load guest count
+        const count = parseInt(localStorage.getItem('guest_album_count') || '0', 10);
+        setGuestCount(count);
     }
     if (driveLink && driveLink.length > 10) {
         checkDriveLink(driveLink);
@@ -215,10 +222,40 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 1. KIỂM TRA GIỚI HẠN KHÁCH (GUEST LIMIT CHECK)
+    if (!user) {
+        const currentCount = parseInt(localStorage.getItem('guest_album_count') || '0', 10);
+        if (currentCount >= 3) {
+            alert("Bạn đã hết 3 lượt tạo miễn phí.\n\nVui lòng đăng nhập bằng Google để tiếp tục tạo album không giới hạn!");
+            return;
+        }
+    }
+
     if (status === 'success' && folderMetadata) {
       const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://luomphotos.com';
       const baseUrl = currentUrl.split('?')[0].split('#')[0];
-      const finalUrl = `${baseUrl}#?album=${folderMetadata.id}`;
+      
+      // TẠO URL KÈM THAM SỐ
+      let finalUrl = `${baseUrl}#?album=${folderMetadata.id}`;
+      
+      // Tham số Limit
+      if (limitPhotos && maxPhotoCount > 0) {
+          finalUrl += `&limit=${maxPhotoCount}`;
+      }
+
+      // Tham số Comments
+      if (allowComment) {
+          finalUrl += `&comments=1`;
+      }
+      
+      // 2. CẬP NHẬT SỐ LƯỢT CỦA KHÁCH
+      if (!user) {
+          const newCount = (parseInt(localStorage.getItem('guest_album_count') || '0', 10) + 1);
+          localStorage.setItem('guest_album_count', newCount.toString());
+          setGuestCount(newCount);
+      }
+
       setCreatedLink(finalUrl);
     } else {
       if (status === 'error') {
@@ -274,7 +311,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                     <div>
                         <h3 className="font-bold text-gray-800 text-lg leading-tight">{folderMetadata.name}</h3>
                         <p className="text-sm text-gray-600 mt-1">
-                            {folderMetadata.count} ảnh • {allowDownload ? 'Cho phép tải' : 'Xem online'} • {limitPhotos ? `Giới hạn ${maxPhotoCount}` : 'Không giới hạn'}
+                            {folderMetadata.count} ảnh • {allowComment ? 'Cho phép bình luận' : 'Không bình luận'} • {limitPhotos ? `Giới hạn ${maxPhotoCount} ảnh` : 'Không giới hạn'}
                         </p>
                     </div>
                 </div>
@@ -491,54 +528,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             </div>
         )}
 
-        {/* GUIDE MODAL */}
-        {showGuide && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-                <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
-                    <div className="bg-green-600 text-white p-4 flex justify-between items-center">
-                        <h3 className="font-bold flex items-center"><Key className="w-4 h-4 mr-2"/> Hướng dẫn lấy API Key</h3>
-                        <button onClick={() => setShowGuide(false)} className="hover:bg-green-700 p-1 rounded"><X className="w-5 h-5" /></button>
-                    </div>
-                    <div className="p-6 overflow-y-auto text-sm space-y-4 text-gray-700">
-                        <p>Để web đọc được thư mục công khai, bạn cần <strong>Google Drive API Key</strong> miễn phí từ Google:</p>
-                        
-                        <ol className="list-decimal pl-5 space-y-3 marker:font-bold marker:text-green-600">
-                            <li>
-                                Truy cập <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer" className="text-blue-600 underline font-medium hover:text-blue-800">Google Cloud Console</a>.
-                            </li>
-                            <li>
-                                Tạo một <strong>Project</strong> mới (hoặc chọn project có sẵn).
-                            </li>
-                            <li>
-                                Vào menu <strong>APIs & Services &gt; Library</strong>. Tìm kiếm từ khóa <code>Google Drive API</code> và nhấn <strong>Enable</strong>.
-                            </li>
-                            <li>
-                                Sau khi bật xong, vào tab <strong>Credentials</strong> (Bên trái).
-                            </li>
-                            <li>
-                                Nhấn <strong>Create Credentials</strong> &gt; chọn <strong>API Key</strong>.
-                            </li>
-                            <li>
-                                Copy đoạn mã bắt đầu bằng <code>AIza...</code> và dán vào ô nhập liệu trên web này.
-                            </li>
-                        </ol>
-
-                        <div className="bg-yellow-50 p-3 rounded border border-yellow-200 text-xs text-yellow-800 mt-4">
-                            <strong>Lưu ý:</strong> API Key này là miễn phí và có giới hạn quota (đủ dùng cá nhân). Không chia sẻ Key của bạn cho người lạ.
-                        </div>
-                    </div>
-                    <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
-                        <button 
-                            onClick={() => setShowGuide(false)}
-                            className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm font-medium"
-                        >
-                            Đã hiểu
-                        </button>
-                    </div>
-                </div>
-            </div>
-        )}
-
         <form onSubmit={handleSubmit} className="space-y-6">
           
           {/* Google Drive Link Input */}
@@ -731,7 +720,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           </div>
 
           {/* Action Button */}
-          <div className="flex justify-center pt-6">
+          <div className="flex flex-col items-center justify-center pt-6">
             <button
               type="submit"
               disabled={status === 'checking' || (status === 'error' && driveLink.length > 0)}
@@ -754,6 +743,14 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                 </>
               )}
             </button>
+            
+            {/* Guest Limit Hint */}
+            {!user && (
+                <div className="mt-3 flex items-center text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full border border-gray-200">
+                    <Lock className="w-3 h-3 mr-1 text-gray-400" />
+                    <span>Miễn phí: {Math.max(0, 3 - guestCount)}/3 lượt tạo</span>
+                </div>
+            )}
           </div>
 
           {/* Info Alert */}

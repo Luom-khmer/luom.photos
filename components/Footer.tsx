@@ -33,8 +33,10 @@ export const Footer: React.FC = () => {
         </div>
 
         {/* Copyright */}
-        <div className="text-gray-300 text-xs mt-2">
-          © 2025 1Touch Pro. Tất cả các quyền được bảo lưu.
+        <div className="text-gray-300 text-xs mt-2 text-center">
+          © 2025 Luom Pro. Tất cả các quyền được bảo lưu.
+          <br />
+          Liên hệ Zalo: 0395.520.057
         </div>
       </div>
     </footer>

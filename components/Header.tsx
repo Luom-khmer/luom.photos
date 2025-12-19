@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, LogIn, Copy, Mail, Globe, LogOut, User as UserIcon } from 'lucide-react';
+import { Home, LogIn, Copy, Mail, Globe, LogOut, User as UserIcon, Facebook } from 'lucide-react';
 import { User } from 'firebase/auth';
 
 interface HeaderProps {
@@ -88,8 +88,13 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
               </a>
             </li>
             <li>
-              <a href="#" className="flex items-center hover:text-yellow-300 transition-colors">
-                <Mail className="w-4 h-4 mr-1" />
+              <a 
+                href="https://www.facebook.com/luom68g1" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center hover:text-yellow-300 transition-colors"
+              >
+                <Facebook className="w-4 h-4 mr-1" />
                 Liên Hệ
               </a>
             </li>
