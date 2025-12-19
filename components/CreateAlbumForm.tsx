@@ -222,9 +222,10 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   }, [driveLink]);
 
   const generateSessionId = () => {
-      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; 
+      // Tạo ID ngẫu nhiên gồm chữ hoa, thường và số (8 ký tự) giống ví dụ EV8wrSFIok
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'; 
       let result = '';
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < 8; i++) {
           result += chars.charAt(Math.floor(Math.random() * chars.length));
       }
       return result;
@@ -239,12 +240,12 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
       const sessionId = generateSessionId();
       
       try {
-          // Timeout race để tránh treo
+          // Timeout race để tránh treo (Tăng lên 20s cho chắc chắn)
           const savePromise = setDoc(doc(db, "sessions", sessionId), {
               sessionId: sessionId,
               driveFolderId: folderMetadata.id,
               albumName: folderMetadata.name,
-              createdAt: new Date(), // Dùng new Date() thay vì Timestamp.now()
+              createdAt: new Date(),
               createdBy: user?.email || 'anonymous',
               settings: {
                   allowDownload,
@@ -255,24 +256,25 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
               }
           });
 
-          // Giới hạn 10 giây
           await Promise.race([
               savePromise,
-              new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 10000))
+              new Promise((_, reject) => setTimeout(() => reject(new Error("Firebase Timeout")), 20000))
           ]);
 
-          const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://luomphotos.com';
-          const baseUrl = currentUrl.split('?')[0].split('#')[0];
-          const finalUrl = `${baseUrl}?session=${sessionId}`;
+          // TẠO LINK DẠNG PATH: /album/ID
+          const origin = typeof window !== 'undefined' ? window.location.origin : 'https://luomphotos.com';
+          const cleanOrigin = origin.endsWith('/') ? origin.slice(0, -1) : origin;
+          
+          const finalUrl = `${cleanOrigin}/album/${sessionId}`;
           
           setCreatedSessionId(sessionId);
           setCreatedLink(finalUrl);
       } catch (error: any) {
           console.error("Lỗi tạo phiên:", error);
-          if (error.message === 'Timeout') {
-              alert("Lỗi: Server phản hồi quá lâu. Vui lòng kiểm tra mạng.");
+          if (error.message === 'Firebase Timeout') {
+              alert("Lỗi: Kết nối tới máy chủ quá lâu (Timeout). Vui lòng kiểm tra mạng của bạn.");
           } else {
-              alert("Lỗi: Không thể lưu session. Kiểm tra quyền truy cập hoặc kết nối mạng.");
+              alert(`Lỗi không thể tạo Album: ${error.message}\nKiểm tra lại kết nối hoặc thử đăng nhập lại.`);
           }
       } finally {
           setIsCreating(false);
