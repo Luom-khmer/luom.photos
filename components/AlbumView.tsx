@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User, Grid, Image as ImageIcon } from 'lucide-react';
+import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon } from 'lucide-react';
 import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
+import { User } from 'firebase/auth';
 
 interface AlbumViewProps {
   albumId: string;
+  albumRef: string | null;
+  user: User | null; // Nhận user để lấy UID
 }
 
 interface Photo {
@@ -25,40 +28,44 @@ interface Comment {
     albumId: string;
 }
 
-export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
-  // Tách biệt nguồn dữ liệu để tránh xung đột
-  const [drivePhotos, setDrivePhotos] = useState<Photo[]>([]); // Dữ liệu gốc từ Drive
-  const [photoStates, setPhotoStates] = useState<Map<string, {isSelected: boolean, isFavorite: boolean}>>(new Map()); // Dữ liệu từ Firestore
+export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user }) => {
+  const [drivePhotos, setDrivePhotos] = useState<Photo[]>([]);
+  const [photoStates, setPhotoStates] = useState<Map<string, {isSelected: boolean, isFavorite: boolean}>>(new Map());
   
   const [loading, setLoading] = useState(true);
   const [albumName, setAlbumName] = useState('Đang tải...');
   const [error, setError] = useState<string | null>(null);
   const [maxSelection, setMaxSelection] = useState<number | null>(null);
   
-  // Filter State
   const [filterMode, setFilterMode] = useState<'all' | 'selected' | 'favorite'>('all');
 
-  // Comment State
   const [allowComments, setAllowComments] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   
-  // Lightbox State
   const [lightboxIndex, setLightboxIndex] = useState<number>(-1);
   const [isZoomed, setIsZoomed] = useState(false);
   const filmstripRef = useRef<HTMLDivElement>(null);
   const commentsEndRef = useRef<HTMLDivElement>(null);
 
-  // Swipe gesture refs
   const touchStartX = useRef<number>(0);
   const touchEndX = useRef<number>(0);
   const minSwipeDistance = 50; 
 
-  // LOCAL STORAGE KEY
-  const LOCAL_STORAGE_KEY = `luom_album_state_${albumId}`;
+  // --- LOGIC PHÂN BIỆT PHIÊN LÀM VIỆC (SESSION SCOPE) ---
+  // Nếu có albumRef trên URL (ví dụ &ref=abc) -> Dùng ref đó (Chế độ chia sẻ phiên)
+  // Nếu KHÔNG có ref -> Dùng user.uid (Chế độ riêng tư/ẩn danh - Mỗi người 1 kho riêng)
+  const sessionScope = useMemo(() => {
+      if (albumRef) return albumRef;
+      return user?.uid || 'guest_unknown';
+  }, [albumRef, user]);
 
-  // 1. Load LocalStorage Initial State (Backup layer)
+  // LOCAL STORAGE KEY: Phân biệt theo sessionScope
+  const SESSION_KEY = `${albumId}_${sessionScope}`;
+  const LOCAL_STORAGE_KEY = `luom_album_state_${SESSION_KEY}`;
+
+  // 1. Load LocalStorage
   useEffect(() => {
       try {
           const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -69,11 +76,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                   parsed.forEach((item: any) => {
                       if(item.photoId) localMap.set(item.photoId, item);
                   });
-                  // Set initial state from LocalStorage immediately to prevent flickering
                   setPhotoStates(prev => {
                       const newMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(prev);
                       localMap.forEach((v, k) => {
-                           if (!newMap.has(k)) newMap.set(k, v);
+                           newMap.set(k, v);
                       });
                       return newMap;
                   });
@@ -82,10 +88,9 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       } catch (e) {
           console.error("Error loading localStorage", e);
       }
-  }, [albumId]);
+  }, [LOCAL_STORAGE_KEY]);
 
   // --- KẾT HỢP DỮ LIỆU ---
-  // Merge dữ liệu từ Drive và Firestore mỗi khi có thay đổi
   const photos = useMemo(() => {
       return drivePhotos.map(p => {
           const state = photoStates.get(p.id);
@@ -97,7 +102,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       });
   }, [drivePhotos, photoStates]);
 
-  // Helper to sync state to LocalStorage
   const syncToLocalStorage = (currentMap: Map<string, {isSelected: boolean, isFavorite: boolean}>) => {
       try {
           const arrayData = Array.from(currentMap.entries()).map(([key, value]) => ({
@@ -110,7 +114,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       }
   };
 
-  // --- LỌC DỮ LIỆU THEO CHẾ ĐỘ XEM ---
   const filteredPhotos = useMemo(() => {
       if (filterMode === 'selected') return photos.filter(p => p.isSelected);
       if (filterMode === 'favorite') return photos.filter(p => p.isFavorite);
@@ -120,12 +123,12 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const selectedCount = useMemo(() => photos.filter(p => p.isSelected).length, [photos]);
   const favoriteCount = useMemo(() => photos.filter(p => p.isFavorite).length, [photos]);
 
-  // 2. Fetch Basic Photo Data from Google Drive
+  // 2. Fetch from Drive
   useEffect(() => {
     const fetchPhotos = async () => {
       setLoading(true);
       setError(null);
-      setDrivePhotos([]); // Reset khi đổi album
+      setDrivePhotos([]);
       
       try {
         const currentHash = window.location.hash;
@@ -160,7 +163,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       }
 
       try {
-           // Fetch Folder Info
            const folderRes = await fetch(`https://www.googleapis.com/drive/v3/files/${albumId}?fields=name&key=${apiKey}`);
            
            if (!folderRes.ok) {
@@ -173,7 +175,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
            const folderData = await folderRes.json();
            setAlbumName(folderData.name);
 
-           // Fetch Images
            const imagesRes = await fetch(`https://www.googleapis.com/drive/v3/files?q='${albumId}'+in+parents+and+mimeType+contains+'image/'+and+trashed=false&fields=files(id,name,thumbnailLink,webContentLink)&pageSize=1000&key=${apiKey}`);
            
            if (imagesRes.ok) {
@@ -209,37 +210,42 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     }
   }, [albumId]);
 
-  // 3. Firestore Listener: Sync Selections & Favorites Real-time
-  // Logic: Khi có dữ liệu mới từ Firestore, merge với dữ liệu hiện tại
+  // 3. Firestore Listener
   useEffect(() => {
       if (!albumId) return;
 
-      const q = query(collection(db, "album_photo_states"), where("albumId", "==", albumId));
+      // QUERY: Lọc theo sessionScope (UID hoặc Ref)
+      const q = query(
+          collection(db, "album_photo_states"), 
+          where("albumId", "==", albumId),
+          where("ref", "==", sessionScope) 
+      );
 
       const unsubscribe = onSnapshot(q, (snapshot) => {
           setPhotoStates(prev => {
              const nextMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(prev);
              snapshot.forEach((doc) => {
                  const data = doc.data();
-                 nextMap.set(data.photoId, {
-                     isSelected: data.isSelected || false,
-                     isFavorite: data.isFavorite || false
-                 });
+                 if (data.photoId) {
+                     nextMap.set(data.photoId, {
+                         isSelected: data.isSelected || false,
+                         isFavorite: data.isFavorite || false
+                     });
+                 }
              });
-             // Also update local storage with the freshest data from server
              syncToLocalStorage(nextMap);
              return nextMap;
           });
       });
 
       return () => unsubscribe();
-  }, [albumId]);
+  }, [albumId, sessionScope]);
 
-  // Firestore Realtime Comments Listener
+  // Comments Listener
   useEffect(() => {
       if (!allowComments || lightboxIndex === -1 || !showComments) return;
       
-      const currentPhotoId = filteredPhotos[lightboxIndex]?.id; // Use filteredPhotos
+      const currentPhotoId = filteredPhotos[lightboxIndex]?.id;
       if (!currentPhotoId) return;
 
       const q = query(
@@ -262,12 +268,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       return () => unsubscribe();
   }, [allowComments, lightboxIndex, showComments, filteredPhotos]);
 
-  // Reset zoom when changing photos
   useEffect(() => {
     setIsZoomed(false);
   }, [lightboxIndex]);
 
-  // Navigation Helpers (Operate on filteredPhotos)
   const nextPhoto = (e?: any) => {
       e?.stopPropagation();
       setLightboxIndex(prev => (prev + 1) % filteredPhotos.length);
@@ -278,36 +282,26 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       setLightboxIndex(prev => (prev - 1 + filteredPhotos.length) % filteredPhotos.length);
   };
 
-  // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
         if (lightboxIndex === -1) return;
         if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
 
         switch(e.key) {
-            case 'ArrowLeft':
-                prevPhoto();
-                break;
-            case 'ArrowRight':
-                nextPhoto();
-                break;
-            case 'Escape':
-                setLightboxIndex(-1);
-                setShowComments(false);
-                break;
-            case ' ': // Space to select/deselect
+            case 'ArrowLeft': prevPhoto(); break;
+            case 'ArrowRight': nextPhoto(); break;
+            case 'Escape': setLightboxIndex(-1); setShowComments(false); break;
+            case ' ': 
                 e.preventDefault();
                 const currentP = filteredPhotos[lightboxIndex];
                 if(currentP) toggleSelect(currentP.id);
                 break;
         }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [lightboxIndex, filteredPhotos]); // Depend on filteredPhotos
+  }, [lightboxIndex, filteredPhotos]);
 
-  // Auto scroll filmstrip
   useEffect(() => {
     if (lightboxIndex !== -1 && filmstripRef.current) {
         const activeThumb = filmstripRef.current.children[lightboxIndex] as HTMLElement;
@@ -317,41 +311,40 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     }
   }, [lightboxIndex]);
 
-  // Write to Firestore with Optimistic UI
+  // --- HÀM LƯU DỮ LIỆU ---
+  // Helper để tạo Doc ID duy nhất: AlbumID + SessionScope + PhotoID
+  const getDocId = (photoId: string) => {
+      return `${albumId}_${sessionScope}_${photoId}`;
+  };
+
   const toggleFavorite = async (id: string) => {
     const photo = photos.find(p => p.id === id);
     if (!photo) return;
     
-    // Optimistic Update: Cập nhật state tạm thời ngay lập tức
     const newState = !photo.isFavorite;
     const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     
     const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(photoStates);
     tempMap.set(id, { ...currentState, isFavorite: newState });
     setPhotoStates(tempMap);
-    
-    // Backup to LocalStorage immediately
     syncToLocalStorage(tempMap);
 
-    const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
+    const docRef = doc(db, "album_photo_states", getDocId(id));
     
     try {
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
+            ref: sessionScope, // Lưu với Scope (UID hoặc Ref)
             isFavorite: newState,
             updatedAt: Timestamp.now(),
-            updatedBy: auth.currentUser?.uid || 'anonymous'
+            updatedBy: user?.uid || 'anonymous'
         }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu trạng thái tim:", e);
-        // Note: We do NOT revert UI here if using LocalStorage strategy, 
-        // to prevent data loss feeling. We keep the local state.
-        // Sync warning only.
     }
   };
 
-  // Write to Firestore with Optimistic UI
   const toggleSelect = async (id: string) => {
     const photo = photos.find(p => p.id === id);
     if (!photo) return;
@@ -361,30 +354,27 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
          return;
     }
     
-    // Optimistic Update
     const newState = !photo.isSelected;
     const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     
     const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(photoStates);
     tempMap.set(id, { ...currentState, isSelected: newState });
     setPhotoStates(tempMap);
-
-    // Backup to LocalStorage immediately
     syncToLocalStorage(tempMap);
 
-    const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
+    const docRef = doc(db, "album_photo_states", getDocId(id));
 
     try {
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
+            ref: sessionScope, // Lưu với Scope (UID hoặc Ref)
             isSelected: newState,
             updatedAt: Timestamp.now(),
-            updatedBy: auth.currentUser?.uid || 'anonymous'
+            updatedBy: user?.uid || 'anonymous'
         }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu trạng thái chọn:", e);
-        // Do NOT revert UI to keep user happy. It is saved in LocalStorage.
     }
   };
 
@@ -425,12 +415,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       e.preventDefault();
       if (!newComment.trim()) return;
 
-      const user = auth.currentUser;
       const userName = user?.displayName || user?.email?.split('@')[0] || "Khách";
       const userAvatar = user?.photoURL || "";
 
       try {
-          // Use filteredPhotos to get current photo ID
           await addDoc(collection(db, "album_comments"), {
               albumId: albumId,
               photoId: filteredPhotos[lightboxIndex].id,
@@ -451,7 +439,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       }
   };
 
-  // Swipe Handlers
   const onTouchStart = (e: React.TouchEvent) => {
       if (isZoomed) return;
       touchEndX.current = 0;
@@ -495,12 +482,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       );
   }
 
-  // Determine current photo based on filtered list
   const currentPhoto = lightboxIndex >= 0 ? filteredPhotos[lightboxIndex] : null;
 
   return (
     <div className="bg-white rounded-md shadow-2xl overflow-hidden min-h-screen pb-20 border border-gray-200">
-      {/* Album Title Bar */}
       <div className="bg-[#2e7d32] text-white py-3 px-4 md:px-6 shadow-md relative z-20 border-b-4 border-[#1b5e20]">
         <h1 className="text-lg md:text-2xl font-medium tracking-wide uppercase shadow-black drop-shadow-md text-center">
             {albumName} ({photos.length} ảnh)
@@ -511,7 +496,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
             )}
         </h1>
         
-        {/* FILTER TABS */}
         <div className="flex justify-center mt-3 space-x-2 md:space-x-4">
             <button
                 onClick={() => setFilterMode('all')}
@@ -537,7 +521,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         </div>
       </div>
 
-      {/* Photo Grid (Renders filteredPhotos) */}
       <div className="p-2 md:p-3 bg-white min-h-[600px]">
         {filteredPhotos.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-gray-400">
@@ -563,10 +546,8 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                             }}
                         />
                         
-                        {/* Gradient Overlay */}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
-                        {/* Top Right: Favorite Heart */}
                         <button 
                             onClick={(e) => { e.stopPropagation(); toggleFavorite(photo.id); }}
                             className="absolute top-2 right-2 p-2 rounded-full hover:bg-black/20 transition-colors z-20"
@@ -576,7 +557,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                             />
                         </button>
 
-                        {/* Bottom Right: Download */}
                         <button 
                             onClick={(e) => handleDownload(photo.id, photo.name, e)}
                             className="absolute bottom-2 right-2 p-1.5 bg-green-600 text-white rounded-full hover:bg-green-700 transition-colors shadow-lg opacity-0 group-hover:opacity-100 z-20"
@@ -585,7 +565,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                             <Download className="w-4 h-4" />
                         </button>
 
-                        {/* Selection Indicator */}
                         {photo.isSelected ? (
                             <div 
                                 className="absolute top-2 left-2 z-20"
@@ -609,18 +588,14 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         )}
       </div>
 
-      {/* LIGHTBOX OVERLAY */}
       {lightboxIndex !== -1 && currentPhoto && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in duration-200">
-            {/* Top Bar / Controls */}
             <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-start p-4 pointer-events-none">
-                {/* Counter (Relative to Filter) */}
                 <div className="bg-black/40 backdrop-blur-sm text-[#4CAF50] px-3 py-1 rounded-full text-sm font-mono font-bold pointer-events-auto border border-white/10">
                     {lightboxIndex + 1} / {filteredPhotos.length} 
                     {filterMode !== 'all' && <span className="text-xs font-normal text-gray-300 ml-1">({filterMode === 'selected' ? 'Đã chọn' : 'Yêu thích'})</span>}
                 </div>
                 
-                {/* Top Right Actions */}
                 <div className="flex items-center gap-4 pointer-events-auto">
                     <button 
                         onClick={toggleZoom}
@@ -638,14 +613,12 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 </div>
             </div>
 
-            {/* Main Image Container */}
             <div 
                 className="flex-1 relative overflow-hidden group touch-none"
                 onTouchStart={onTouchStart}
                 onTouchMove={onTouchMove}
                 onTouchEnd={onTouchEnd}
             >
-                {/* Navigation Arrows */}
                 <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-between px-2 md:px-4">
                     <button 
                         onClick={prevPhoto}
@@ -662,9 +635,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                     </button>
                 </div>
 
-                {/* Floating Action Buttons on Image */}
                 <div className="absolute bottom-4 right-4 flex flex-col gap-4 z-30 pointer-events-auto">
-                     {/* Select Toggle */}
                      <button 
                         onClick={(e) => { e.stopPropagation(); toggleSelect(currentPhoto.id); }}
                         className={`w-12 h-12 rounded-full flex items-center justify-center text-white shadow-xl transition-all hover:scale-110 border-2 ${currentPhoto.isSelected ? 'bg-green-600 border-green-500' : 'bg-black/40 border-white/30 hover:bg-white/20'}`}
@@ -673,7 +644,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                          <Check className="w-6 h-6" />
                      </button>
 
-                     {/* Favorite Toggle */}
                      <button 
                         onClick={(e) => { e.stopPropagation(); toggleFavorite(currentPhoto.id); }}
                         className={`w-12 h-12 rounded-full flex items-center justify-center shadow-xl transition-all hover:scale-110 border-2 ${currentPhoto.isFavorite ? 'bg-red-500 border-red-500 text-white' : 'bg-black/40 border-white/30 text-white hover:bg-white/20'}`}
@@ -682,7 +652,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                          <Heart className={`w-6 h-6 ${currentPhoto.isFavorite ? 'fill-current' : ''}`} />
                      </button>
 
-                     {/* Download */}
                      <button 
                         onClick={(e) => handleDownload(currentPhoto.id, currentPhoto.name, e)}
                         className="w-12 h-12 bg-[#4CAF50] rounded-full flex items-center justify-center text-white shadow-xl hover:bg-green-600 transition-all hover:scale-110 border-2 border-green-400"
@@ -691,7 +660,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                          <Download className="w-6 h-6" />
                      </button>
 
-                     {/* Message */}
                      {allowComments && (
                          <button 
                             onClick={(e) => { e.stopPropagation(); setShowComments(!showComments); }}
@@ -702,13 +670,11 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                      )}
                 </div>
 
-                {/* COMMENTS SIDEBAR / OVERLAY */}
                 {showComments && (
                     <div 
                         className="absolute inset-y-0 right-0 w-full md:w-96 bg-white/95 backdrop-blur-md shadow-2xl z-40 flex flex-col animate-in slide-in-from-right duration-300 pointer-events-auto"
                         onClick={(e) => e.stopPropagation()} 
                     >
-                        {/* Header */}
                         <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
                             <h3 className="font-bold text-gray-700 flex items-center">
                                 <MessageCircle className="w-4 h-4 mr-2" />
@@ -722,7 +688,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                             </button>
                         </div>
 
-                        {/* List */}
                         <div className="flex-1 overflow-y-auto p-4 space-y-4">
                             {comments.length === 0 ? (
                                 <div className="text-center text-gray-400 py-10 text-sm">
@@ -736,7 +701,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                                                 <img src={comment.userAvatar} alt="" className="w-8 h-8 rounded-full border border-gray-200" />
                                             ) : (
                                                 <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
-                                                    <User className="w-4 h-4" />
+                                                    <UserIcon className="w-4 h-4" />
                                                 </div>
                                             )}
                                         </div>
@@ -755,7 +720,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                             <div ref={commentsEndRef} />
                         </div>
 
-                        {/* Input */}
                         <div className="p-3 border-t border-gray-200 bg-white">
                             <form onSubmit={handleAddComment} className="flex gap-2">
                                 <input
@@ -778,7 +742,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                     </div>
                 )}
 
-                {/* The Image */}
                 <div 
                     className={`w-full h-full flex items-center justify-center ${isZoomed ? 'overflow-auto items-start' : 'overflow-hidden'}`}
                     onClick={(e) => { if(isZoomed) toggleZoom(e); }}
@@ -797,7 +760,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 </div>
             </div>
 
-            {/* Bottom Bar: Filename & Filmstrip */}
             <div className="bg-black z-20 flex flex-col pb-2">
                 <div className="text-center text-gray-300 py-1 text-sm font-medium">
                     {currentPhoto.name}
@@ -834,7 +796,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         </div>
       )}
 
-      {/* FABs */}
       {lightboxIndex === -1 && (
         <div className="fixed bottom-10 right-4 flex flex-col gap-3 z-50 items-center">
              <button 

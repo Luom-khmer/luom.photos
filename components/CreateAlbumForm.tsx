@@ -242,7 +242,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
     e.preventDefault();
 
     // 1. KIỂM TRA GIỚI HẠN KHÁCH (GUEST LIMIT CHECK)
-    // Nếu không có user hoặc là user ẩn danh thì tính là khách
     if (!isRealUser) {
         const currentCount = parseInt(localStorage.getItem('guest_album_count') || '0', 10);
         if (currentCount >= 3) {
@@ -255,7 +254,8 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
       const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://luomphotos.com';
       const baseUrl = currentUrl.split('?')[0].split('#')[0];
       
-      // TẠO URL KÈM THAM SỐ
+      // TẠO URL CHUẨN (Không còn tham số &ref=... ngẫu nhiên)
+      // Điều này giúp 1 link có thể gửi cho nhiều người
       let finalUrl = `${baseUrl}#?album=${folderMetadata.id}`;
       
       // Tham số Limit
@@ -268,10 +268,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           finalUrl += `&comments=1`;
       }
       
-      // Thêm tham số ngẫu nhiên để link luôn khác nhau (tránh trùng lặp)
-      const uniqueId = Math.random().toString(36).substring(2, 7);
-      finalUrl += `&ref=${uniqueId}`;
-
       // 2. CẬP NHẬT SỐ LƯỢT CỦA KHÁCH
       if (!isRealUser) {
           const newCount = (parseInt(localStorage.getItem('guest_album_count') || '0', 10) + 1);

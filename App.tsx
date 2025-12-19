@@ -10,43 +10,50 @@ import { Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
   const [albumId, setAlbumId] = useState<string | null>(null);
+  const [albumRef, setAlbumRef] = useState<string | null>(null); // State lưu mã Ref (nếu có)
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false); // Trạng thái chờ Auth
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
     // 1. URL Parsing Logic
-    const getAlbumIdFromUrl = () => {
+    const parseUrlParams = () => {
         try {
-            if (typeof window === 'undefined') return null;
+            if (typeof window === 'undefined') return { id: null, ref: null };
             let id = null;
+            let ref = null;
+            let params: URLSearchParams | null = null;
 
+            // Ưu tiên đọc từ Hash (do cấu trúc #?album=...)
             if (window.location.hash && window.location.hash.includes('album=')) {
                 const hash = window.location.hash;
                 const parts = hash.includes('?') ? hash.split('?') : [hash];
                 if (parts.length > 1) {
-                    const params = new URLSearchParams(parts[1]);
-                    if (params.get('album')) id = params.get('album');
+                    params = new URLSearchParams(parts[1]);
                 } else {
                      const cleanHash = hash.substring(1); 
-                     const params = new URLSearchParams(cleanHash);
-                     if (params.get('album')) id = params.get('album');
+                     params = new URLSearchParams(cleanHash);
                 }
             } else {
-                const params = new URLSearchParams(window.location.search);
-                const idFromSearch = params.get('album');
-                if (idFromSearch) id = idFromSearch;
+                // Fallback đọc từ Search query (?album=...)
+                params = new URLSearchParams(window.location.search);
             }
             
-            return id ? id.trim() : null;
+            if (params) {
+                if (params.get('album')) id = params.get('album')?.trim() || null;
+                if (params.get('ref')) ref = params.get('ref')?.trim() || null;
+            }
+            
+            return { id, ref };
         } catch (error) {
-            console.error("Error parsing URL for album ID:", error);
+            console.error("Error parsing URL:", error);
+            return { id: null, ref: null };
         }
-        return null;
     };
 
     const handleUrlChange = () => {
-        const id = getAlbumIdFromUrl();
+        const { id, ref } = parseUrlParams();
         setAlbumId(id);
+        setAlbumRef(ref); // Cập nhật ref
         window.scrollTo(0, 0);
     };
 
@@ -55,8 +62,6 @@ const App: React.FC = () => {
     window.addEventListener('hashchange', handleUrlChange);
 
     // --- SAFETY TIMEOUT ---
-    // Fix lỗi treo: Nếu sau 2.5 giây mà Auth chưa xong (do mạng lag hoặc lỗi), 
-    // ép buộc vào app luôn để khách không phải chờ.
     const safetyTimer = setTimeout(() => {
         setIsAuthReady((prev) => {
             if (!prev) {
@@ -70,16 +75,12 @@ const App: React.FC = () => {
     // 2. Firebase Auth Listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // CÓ USER (User thật hoặc Ẩn danh)
         if (user.isAnonymous) {
             console.log("Silent Anonymous Auth Active:", user.uid);
-            // QUAN TRỌNG: Vẫn set user vào state để hệ thống có UID lưu ảnh
-            // Nhưng ở Header ta sẽ check isAnonymous để ẩn giao diện.
             setCurrentUser(user); 
         } else {
             setCurrentUser(user);
             
-            // Logic lưu user admin/google
             if (user.email) {
                 const email = user.email;
                 const userDocRef = doc(db, 'allowed_users', email);
@@ -114,18 +115,16 @@ const App: React.FC = () => {
                 }
             }
         }
-        clearTimeout(safetyTimer); // Hủy timeout nếu load thành công
+        clearTimeout(safetyTimer);
         setIsAuthReady(true); 
       } else {
-        // Chưa có user -> Kích hoạt đăng nhập ẩn danh ngay lập tức
         console.log("Initializing Anonymous Auth...");
         signInAnonymously(auth)
             .then(() => {
-                // Thành công -> onAuthStateChanged sẽ chạy lại vào block 'if (user)'
+                // Thành công
             })
             .catch((error) => {
                 console.error("Lỗi kích hoạt chế độ khách:", error);
-                // Nếu lỗi, force load luôn để không treo màn hình
                 setIsAuthReady(true); 
             });
       }
@@ -139,12 +138,10 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Auth Handlers
   const handleLogin = async () => {
     try {
       await loginWithGoogle();
     } catch (error) {
-      // Alert handled in loginWithGoogle
     }
   };
 
@@ -152,7 +149,6 @@ const App: React.FC = () => {
     await logoutUser();
   };
 
-  // Màn hình chờ khi đang xác thực ngầm
   if (!isAuthReady) {
       return (
           <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
@@ -172,7 +168,8 @@ const App: React.FC = () => {
       
       <main className="flex-grow container mx-auto px-4 py-8 flex flex-col items-center">
         {albumId ? (
-          <AlbumView albumId={albumId} />
+          // Truyền currentUser vào AlbumView để dùng UID làm Session Scope
+          <AlbumView albumId={albumId} albumRef={albumRef} user={currentUser} />
         ) : (
           <CreateAlbumForm user={currentUser} />
         )}
