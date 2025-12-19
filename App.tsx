@@ -54,6 +54,19 @@ const App: React.FC = () => {
     window.addEventListener('popstate', handleUrlChange);
     window.addEventListener('hashchange', handleUrlChange);
 
+    // --- SAFETY TIMEOUT ---
+    // Fix lỗi treo: Nếu sau 2.5 giây mà Auth chưa xong (do mạng lag hoặc lỗi), 
+    // ép buộc vào app luôn để khách không phải chờ.
+    const safetyTimer = setTimeout(() => {
+        setIsAuthReady((prev) => {
+            if (!prev) {
+                console.warn("Auth initialization timed out, forcing render.");
+                return true;
+            }
+            return prev;
+        });
+    }, 2500);
+
     // 2. Firebase Auth Listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -99,22 +112,27 @@ const App: React.FC = () => {
                 }
             }
         }
-        setIsAuthReady(true); // Đã sẵn sàng render App
+        clearTimeout(safetyTimer); // Hủy timeout nếu load thành công
+        setIsAuthReady(true); 
       } else {
         // Chưa có user -> Kích hoạt đăng nhập ẩn danh ngay lập tức
         console.log("Initializing Anonymous Auth...");
-        signInAnonymously(auth).catch((error) => {
-            console.error("Lỗi kích hoạt chế độ khách:", error);
-            // Nếu lỗi quá nặng, vẫn cho render nhưng tính năng ghi sẽ hỏng
-            setIsAuthReady(true); 
-        });
-        // Không set isAuthReady(true) ở đây, chờ callback chạy lại vào nhánh 'if (user)'
+        signInAnonymously(auth)
+            .then(() => {
+                // Thành công -> onAuthStateChanged sẽ chạy lại vào block 'if (user)'
+            })
+            .catch((error) => {
+                console.error("Lỗi kích hoạt chế độ khách:", error);
+                // Nếu lỗi, force load luôn để không treo màn hình
+                setIsAuthReady(true); 
+            });
       }
     });
 
     return () => {
         window.removeEventListener('popstate', handleUrlChange);
         window.removeEventListener('hashchange', handleUrlChange);
+        clearTimeout(safetyTimer);
         unsubscribe(); 
     };
   }, []);
