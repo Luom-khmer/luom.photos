@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User } from 'lucide-react';
+import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User, Filter, Grid, Image as ImageIcon } from 'lucide-react';
 import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 
@@ -35,6 +35,9 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   const [error, setError] = useState<string | null>(null);
   const [maxSelection, setMaxSelection] = useState<number | null>(null);
   
+  // Filter State
+  const [filterMode, setFilterMode] = useState<'all' | 'selected' | 'favorite'>('all');
+
   // Comment State
   const [allowComments, setAllowComments] = useState(false);
   const [showComments, setShowComments] = useState(false);
@@ -65,7 +68,15 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       });
   }, [drivePhotos, photoStates]);
 
+  // --- LỌC DỮ LIỆU THEO CHẾ ĐỘ XEM ---
+  const filteredPhotos = useMemo(() => {
+      if (filterMode === 'selected') return photos.filter(p => p.isSelected);
+      if (filterMode === 'favorite') return photos.filter(p => p.isFavorite);
+      return photos;
+  }, [photos, filterMode]);
+
   const selectedCount = useMemo(() => photos.filter(p => p.isSelected).length, [photos]);
+  const favoriteCount = useMemo(() => photos.filter(p => p.isFavorite).length, [photos]);
 
   // 1. Fetch Basic Photo Data from Google Drive
   useEffect(() => {
@@ -178,7 +189,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   useEffect(() => {
       if (!allowComments || lightboxIndex === -1 || !showComments) return;
       
-      const currentPhotoId = photos[lightboxIndex]?.id;
+      const currentPhotoId = filteredPhotos[lightboxIndex]?.id; // Use filteredPhotos
       if (!currentPhotoId) return;
 
       const q = query(
@@ -199,22 +210,22 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       });
 
       return () => unsubscribe();
-  }, [allowComments, lightboxIndex, showComments, photos]);
+  }, [allowComments, lightboxIndex, showComments, filteredPhotos]);
 
   // Reset zoom when changing photos
   useEffect(() => {
     setIsZoomed(false);
   }, [lightboxIndex]);
 
-  // Navigation Helpers
+  // Navigation Helpers (Operate on filteredPhotos)
   const nextPhoto = (e?: any) => {
       e?.stopPropagation();
-      setLightboxIndex(prev => (prev + 1) % photos.length);
+      setLightboxIndex(prev => (prev + 1) % filteredPhotos.length);
   };
 
   const prevPhoto = (e?: any) => {
       e?.stopPropagation();
-      setLightboxIndex(prev => (prev - 1 + photos.length) % photos.length);
+      setLightboxIndex(prev => (prev - 1 + filteredPhotos.length) % filteredPhotos.length);
   };
 
   // Keyboard navigation
@@ -236,7 +247,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                 break;
             case ' ': // Space to select/deselect
                 e.preventDefault();
-                const currentP = photos[lightboxIndex];
+                const currentP = filteredPhotos[lightboxIndex];
                 if(currentP) toggleSelect(currentP.id);
                 break;
         }
@@ -244,7 +255,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [lightboxIndex, photos]);
+  }, [lightboxIndex, filteredPhotos]); // Depend on filteredPhotos
 
   // Auto scroll filmstrip
   useEffect(() => {
@@ -367,9 +378,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       const userAvatar = user?.photoURL || "";
 
       try {
+          // Use filteredPhotos to get current photo ID
           await addDoc(collection(db, "album_comments"), {
               albumId: albumId,
-              photoId: photos[lightboxIndex].id,
+              photoId: filteredPhotos[lightboxIndex].id,
               text: newComment.trim(),
               userName: userName,
               userAvatar: userAvatar,
@@ -431,85 +443,118 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
       );
   }
 
-  const currentPhoto = lightboxIndex >= 0 ? photos[lightboxIndex] : null;
+  // Determine current photo based on filtered list
+  const currentPhoto = lightboxIndex >= 0 ? filteredPhotos[lightboxIndex] : null;
 
   return (
     <div className="bg-white rounded-md shadow-2xl overflow-hidden min-h-screen pb-20 border border-gray-200">
       {/* Album Title Bar */}
-      <div className="bg-[#2e7d32] text-white py-3 px-6 text-center shadow-md relative z-20 border-b-4 border-[#1b5e20]">
-        <h1 className="text-xl md:text-2xl font-medium tracking-wide uppercase shadow-black drop-shadow-md">
+      <div className="bg-[#2e7d32] text-white py-3 px-4 md:px-6 shadow-md relative z-20 border-b-4 border-[#1b5e20]">
+        <h1 className="text-lg md:text-2xl font-medium tracking-wide uppercase shadow-black drop-shadow-md text-center">
             {albumName} ({photos.length} ảnh)
             {maxSelection !== null && (
-                <span className="block text-sm font-normal text-yellow-300 mt-1 bg-black/20 rounded-full py-0.5 px-3 w-fit mx-auto">
-                    Đang giới hạn chọn tối đa: {maxSelection} ảnh
+                <span className="block text-xs md:text-sm font-normal text-yellow-300 mt-1 bg-black/20 rounded-full py-0.5 px-3 w-fit mx-auto">
+                    Giới hạn: {selectedCount}/{maxSelection} ảnh
                 </span>
             )}
         </h1>
+        
+        {/* FILTER TABS */}
+        <div className="flex justify-center mt-3 space-x-2 md:space-x-4">
+            <button
+                onClick={() => setFilterMode('all')}
+                className={`flex items-center px-3 py-1.5 rounded-full text-xs md:text-sm transition-all ${filterMode === 'all' ? 'bg-white text-green-700 font-bold shadow-lg' : 'bg-green-800/50 text-green-100 hover:bg-green-700'}`}
+            >
+                <Grid className="w-3 h-3 md:w-4 md:h-4 mr-1.5" />
+                Tất cả ({photos.length})
+            </button>
+            <button
+                onClick={() => setFilterMode('selected')}
+                className={`flex items-center px-3 py-1.5 rounded-full text-xs md:text-sm transition-all ${filterMode === 'selected' ? 'bg-white text-green-700 font-bold shadow-lg ring-2 ring-yellow-400' : 'bg-green-800/50 text-green-100 hover:bg-green-700'}`}
+            >
+                <Check className="w-3 h-3 md:w-4 md:h-4 mr-1.5" />
+                Đã chọn ({selectedCount})
+            </button>
+            <button
+                onClick={() => setFilterMode('favorite')}
+                className={`flex items-center px-3 py-1.5 rounded-full text-xs md:text-sm transition-all ${filterMode === 'favorite' ? 'bg-white text-red-600 font-bold shadow-lg' : 'bg-green-800/50 text-green-100 hover:bg-green-700'}`}
+            >
+                <Heart className={`w-3 h-3 md:w-4 md:h-4 mr-1.5 ${filterMode === 'favorite' ? 'fill-current' : ''}`} />
+                Yêu thích ({favoriteCount})
+            </button>
+        </div>
       </div>
 
-      {/* Photo Grid */}
-      <div className="p-2 md:p-3 bg-white min-h-[800px]">
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-2">
-            {photos.map((photo, index) => (
-                <div 
-                    key={photo.id} 
-                    className={`relative group aspect-[3/2] overflow-hidden rounded-sm bg-gray-100 shadow-sm hover:shadow-lg transition-all cursor-pointer ${photo.isSelected ? 'ring-4 ring-green-500' : ''}`}
-                    onClick={() => setLightboxIndex(index)}
-                >
-                    <img 
-                        src={photo.url} 
-                        alt={photo.name}
-                        className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 ${photo.isSelected ? 'scale-95' : ''}`}
-                        loading="lazy"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                            (e.target as HTMLImageElement).src = `https://drive.google.com/thumbnail?id=${photo.id}&sz=w600`;
-                        }}
-                    />
-                    
-                    {/* Gradient Overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-
-                    {/* Top Right: Favorite Heart */}
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); toggleFavorite(photo.id); }}
-                        className="absolute top-2 right-2 p-2 rounded-full hover:bg-black/20 transition-colors z-20"
+      {/* Photo Grid (Renders filteredPhotos) */}
+      <div className="p-2 md:p-3 bg-white min-h-[600px]">
+        {filteredPhotos.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                <ImageIcon className="w-16 h-16 mb-2 opacity-20" />
+                <p>Không có ảnh nào trong mục này.</p>
+            </div>
+        ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-2">
+                {filteredPhotos.map((photo, index) => (
+                    <div 
+                        key={photo.id} 
+                        className={`relative group aspect-[3/2] overflow-hidden rounded-sm bg-gray-100 shadow-sm hover:shadow-lg transition-all cursor-pointer ${photo.isSelected ? 'ring-4 ring-green-500' : ''}`}
+                        onClick={() => setLightboxIndex(index)}
                     >
-                        <Heart 
-                            className={`w-6 h-6 drop-shadow-lg ${photo.isFavorite ? 'fill-red-500 text-red-500' : 'text-white'}`} 
+                        <img 
+                            src={photo.url} 
+                            alt={photo.name}
+                            className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 ${photo.isSelected ? 'scale-95' : ''}`}
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => {
+                                (e.target as HTMLImageElement).src = `https://drive.google.com/thumbnail?id=${photo.id}&sz=w600`;
+                            }}
                         />
-                    </button>
+                        
+                        {/* Gradient Overlay */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
-                    {/* Bottom Right: Download */}
-                    <button 
-                        onClick={(e) => handleDownload(photo.id, photo.name, e)}
-                        className="absolute bottom-2 right-2 p-1.5 bg-green-600 text-white rounded-full hover:bg-green-700 transition-colors shadow-lg opacity-0 group-hover:opacity-100 z-20"
-                        title="Tải ảnh gốc"
-                    >
-                        <Download className="w-4 h-4" />
-                    </button>
-
-                    {/* Selection Indicator */}
-                    {photo.isSelected ? (
-                        <div 
-                            className="absolute top-2 left-2 z-20"
-                            onClick={(e) => { e.stopPropagation(); toggleSelect(photo.id); }}
+                        {/* Top Right: Favorite Heart */}
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); toggleFavorite(photo.id); }}
+                            className="absolute top-2 right-2 p-2 rounded-full hover:bg-black/20 transition-colors z-20"
                         >
-                            <div className="bg-green-500 text-white rounded-full p-1 shadow-md hover:scale-110 transition-transform">
-                                <Check className="w-4 h-4" />
+                            <Heart 
+                                className={`w-6 h-6 drop-shadow-lg ${photo.isFavorite ? 'fill-red-500 text-red-500' : 'text-white'}`} 
+                            />
+                        </button>
+
+                        {/* Bottom Right: Download */}
+                        <button 
+                            onClick={(e) => handleDownload(photo.id, photo.name, e)}
+                            className="absolute bottom-2 right-2 p-1.5 bg-green-600 text-white rounded-full hover:bg-green-700 transition-colors shadow-lg opacity-0 group-hover:opacity-100 z-20"
+                            title="Tải ảnh gốc"
+                        >
+                            <Download className="w-4 h-4" />
+                        </button>
+
+                        {/* Selection Indicator */}
+                        {photo.isSelected ? (
+                            <div 
+                                className="absolute top-2 left-2 z-20"
+                                onClick={(e) => { e.stopPropagation(); toggleSelect(photo.id); }}
+                            >
+                                <div className="bg-green-500 text-white rounded-full p-1 shadow-md hover:scale-110 transition-transform">
+                                    <Check className="w-4 h-4" />
+                                </div>
                             </div>
-                        </div>
-                    ) : (
-                        <div 
-                            className="absolute top-2 left-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={(e) => { e.stopPropagation(); toggleSelect(photo.id); }}
-                        >
-                            <div className="w-6 h-6 rounded-full border-2 border-white hover:bg-white/20 transition-colors shadow-sm"></div>
-                        </div>
-                    )}
-                </div>
-            ))}
-        </div>
+                        ) : (
+                            <div 
+                                className="absolute top-2 left-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={(e) => { e.stopPropagation(); toggleSelect(photo.id); }}
+                            >
+                                <div className="w-6 h-6 rounded-full border-2 border-white hover:bg-white/20 transition-colors shadow-sm"></div>
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        )}
       </div>
 
       {/* LIGHTBOX OVERLAY */}
@@ -517,9 +562,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
         <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in duration-200">
             {/* Top Bar / Controls */}
             <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-start p-4 pointer-events-none">
-                {/* Counter */}
+                {/* Counter (Relative to Filter) */}
                 <div className="bg-black/40 backdrop-blur-sm text-[#4CAF50] px-3 py-1 rounded-full text-sm font-mono font-bold pointer-events-auto border border-white/10">
-                    {lightboxIndex + 1} / {photos.length}
+                    {lightboxIndex + 1} / {filteredPhotos.length} 
+                    {filterMode !== 'all' && <span className="text-xs font-normal text-gray-300 ml-1">({filterMode === 'selected' ? 'Đã chọn' : 'Yêu thích'})</span>}
                 </div>
                 
                 {/* Top Right Actions */}
@@ -711,7 +757,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
                         className="flex overflow-x-auto gap-1 px-2 h-full items-center w-full scrollbar-hide"
                         style={{ scrollBehavior: 'smooth' }}
                     >
-                        {photos.map((photo, idx) => (
+                        {filteredPhotos.map((photo, idx) => (
                             <div 
                                 key={photo.id}
                                 onClick={() => setLightboxIndex(idx)}
@@ -762,7 +808,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
              </button>
 
              <div className="pt-1">
-                <button className={`w-10 h-10 md:w-11 md:h-11 text-white shadow-xl flex items-center justify-center transform rotate-45 hover:scale-110 transition-transform cursor-default border-2 border-white ${maxSelection !== null && selectedCount >= maxSelection ? 'bg-gray-500' : 'bg-[#FF0000]'}`}>
+                <button 
+                    onClick={() => setFilterMode('selected')}
+                    className={`w-10 h-10 md:w-11 md:h-11 text-white shadow-xl flex items-center justify-center transform rotate-45 hover:scale-110 transition-transform cursor-pointer border-2 border-white ${maxSelection !== null && selectedCount >= maxSelection ? 'bg-gray-500' : 'bg-[#FF0000]'}`}
+                >
                     <span className="transform -rotate-45 font-bold text-sm md:text-base">
                         {selectedCount}{maxSelection ? `/${maxSelection}` : ''}
                     </span>
