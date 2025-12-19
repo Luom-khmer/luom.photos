@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, LogIn, Copy, Globe, LogOut, User as UserIcon, Facebook } from 'lucide-react';
+import { Home, LogIn, Copy, Globe, LogOut, User as UserIcon, Facebook, Shield } from 'lucide-react';
 import { User } from 'firebase/auth';
 
 interface HeaderProps {
@@ -14,6 +14,9 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
     window.history.pushState({}, '', window.location.pathname);
     window.dispatchEvent(new PopStateEvent('popstate'));
   };
+
+  // Logic kiểm tra hiển thị: Chỉ hiện thông tin user nếu KHÔNG PHẢI là ẩn danh
+  const isRealUser = user && !user.isAnonymous;
 
   return (
     <header className="bg-[#1b5e20] text-white py-3 px-4 shadow-md z-20">
@@ -49,16 +52,16 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
             </li>
             
             {/* User Login/Logout Logic */}
-            {user ? (
+            {isRealUser ? (
               <li className="flex items-center space-x-3 bg-green-800/50 px-3 py-1 rounded-full border border-green-700">
                 <div className="flex items-center">
-                  {user.photoURL ? (
+                  {user && user.photoURL ? (
                     <img src={user.photoURL} alt="Avatar" className="w-6 h-6 rounded-full border border-white/50 mr-2" />
                   ) : (
                     <UserIcon className="w-5 h-5 mr-1" />
                   )}
                   <span className="text-xs md:text-sm truncate max-w-[100px] md:max-w-none text-yellow-100">
-                    {user.displayName || user.email}
+                    {user?.displayName || user?.email}
                   </span>
                 </div>
                 <button 
@@ -70,13 +73,26 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
                 </button>
               </li>
             ) : (
+              // Đối với khách hàng (Ẩn danh hoặc chưa đăng nhập), hiện nút Đăng nhập cho Admin
+              // Hoặc hiện Badge "Khách" để biết là đang kết nối an toàn
               <li>
-                <button 
+                 <button 
                   onClick={onLogin} 
                   className="flex items-center hover:text-yellow-300 transition-colors"
+                  title="Admin đăng nhập"
                 >
-                  <LogIn className="w-4 h-4 mr-1" />
-                  Đăng Nhập
+                  {user?.isAnonymous ? (
+                     // Đã có kết nối ẩn danh chạy ngầm
+                     <span className="flex items-center text-green-200 bg-green-900/30 px-2 py-0.5 rounded text-xs border border-green-800">
+                        <Shield className="w-3 h-3 mr-1" /> Khách
+                     </span>
+                  ) : (
+                     // Chưa kết nối gì cả
+                     <>
+                        <LogIn className="w-4 h-4 mr-1" />
+                        Đăng Nhập
+                     </>
+                  )}
                 </button>
               </li>
             )}

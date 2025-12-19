@@ -70,10 +70,12 @@ const App: React.FC = () => {
     // 2. Firebase Auth Listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // Có user (kể cả User thật hoặc Ẩn danh)
+        // CÓ USER (User thật hoặc Ẩn danh)
         if (user.isAnonymous) {
             console.log("Silent Anonymous Auth Active:", user.uid);
-            setCurrentUser(null); // UI vẫn hiện là khách
+            // QUAN TRỌNG: Vẫn set user vào state để hệ thống có UID lưu ảnh
+            // Nhưng ở Header ta sẽ check isAnonymous để ẩn giao diện.
+            setCurrentUser(user); 
         } else {
             setCurrentUser(user);
             

@@ -13,8 +13,9 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [driveLink, setDriveLink] = useState('');
   const [password, setPassword] = useState('');
   
-  // Logic xác định quyền Admin
-  const isAdmin = user && user.email && ADMIN_EMAILS.includes(user.email);
+  // Logic xác định quyền Admin: Phải có email và không phải ẩn danh
+  const isRealUser = user && !user.isAnonymous;
+  const isAdmin = isRealUser && user.email && ADMIN_EMAILS.includes(user.email);
 
   // API Key State
   const [apiKey, setApiKey] = useState(() => {
@@ -241,7 +242,8 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
     e.preventDefault();
 
     // 1. KIỂM TRA GIỚI HẠN KHÁCH (GUEST LIMIT CHECK)
-    if (!user) {
+    // Nếu không có user hoặc là user ẩn danh thì tính là khách
+    if (!isRealUser) {
         const currentCount = parseInt(localStorage.getItem('guest_album_count') || '0', 10);
         if (currentCount >= 3) {
             alert("Bạn đã hết 3 lượt tạo miễn phí.\n\nVui lòng đăng nhập bằng Google để tiếp tục tạo album không giới hạn!");
@@ -271,7 +273,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
       finalUrl += `&ref=${uniqueId}`;
 
       // 2. CẬP NHẬT SỐ LƯỢT CỦA KHÁCH
-      if (!user) {
+      if (!isRealUser) {
           const newCount = (parseInt(localStorage.getItem('guest_album_count') || '0', 10) + 1);
           localStorage.setItem('guest_album_count', newCount.toString());
           setGuestCount(newCount);
@@ -770,7 +772,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             </button>
             
             {/* Guest Limit Hint */}
-            {!user && (
+            {!isRealUser && (
                 <div className="mt-3 flex items-center text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full border border-gray-200">
                     <Lock className="w-3 h-3 mr-1 text-gray-400" />
                     <span>Miễn phí: {Math.max(0, 3 - guestCount)}/3 lượt tạo</span>
