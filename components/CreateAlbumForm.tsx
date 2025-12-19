@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw, Shield, Users, Trash2, UserPlus, History, Lock } from 'lucide-react';
+import { Triangle, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, RefreshCw, Shield, Users, Trash2, UserPlus, Link as LinkIcon } from 'lucide-react';
 import { Switch } from './ui/Switch';
 import { User } from 'firebase/auth';
 import { db, ADMIN_EMAILS } from '../firebaseConfig';
-import { collection, doc, setDoc, updateDoc, onSnapshot, query } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, onSnapshot, query, Timestamp } from 'firebase/firestore';
 
 interface CreateAlbumFormProps {
   user: User | null;
@@ -11,9 +11,8 @@ interface CreateAlbumFormProps {
 
 export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [driveLink, setDriveLink] = useState('');
-  const [password, setPassword] = useState('');
   
-  // Logic xác định quyền Admin: Phải có email và không phải ẩn danh
+  // Logic xác định quyền Admin
   const isRealUser = user && !user.isAnonymous;
   const isAdmin = isRealUser && user.email && ADMIN_EMAILS.includes(user.email);
 
@@ -29,7 +28,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
 
-  // User Management State (Only for Admin)
+  // User Management State
   const [activeUsers, setActiveUsers] = useState<{email: string, lastLogin?: any, photoURL?: string}[]>([]);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -51,54 +50,44 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
 
   // Creation Success State
   const [createdLink, setCreatedLink] = useState<string | null>(null);
+  const [createdSessionId, setCreatedSessionId] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
   const [isBlobUrl, setIsBlobUrl] = useState(false);
-
-  // Guest limit state
-  const [guestCount, setGuestCount] = useState(0);
+  const [isCreating, setIsCreating] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
         localStorage.setItem('google_api_key', apiKey);
         setIsBlobUrl(window.location.protocol === 'blob:');
-        
-        // Load guest count
-        const count = parseInt(localStorage.getItem('guest_album_count') || '0', 10);
-        setGuestCount(count);
     }
     if (driveLink && driveLink.length > 10) {
         checkDriveLink(driveLink);
     }
   }, [apiKey]);
 
-  // Realtime Listener for Users (Only fetch NOT BANNED users)
+  // Realtime Listener for Users
   useEffect(() => {
     if (isAdmin && showSettings) {
         setLoadingUsers(true);
-        // Chỉ lấy những user chưa bị banned
         const q = query(collection(db, "allowed_users"));
         
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const users: any[] = [];
             snapshot.forEach((docSnapshot) => {
                 const data = docSnapshot.data();
-                // Fix quan trọng: Nếu data.email không tồn tại, dùng doc.id làm email
                 const email = data.email || docSnapshot.id;
-                
-                // Filter client-side cho đơn giản: Chỉ hiện những người chưa bị banned
                 if (data.banned !== true) {
                     users.push({
                         ...data,
-                        email: email // Đảm bảo trường email luôn có giá trị
+                        email: email
                     });
                 }
             });
             
-            // Sắp xếp theo lần đăng nhập cuối
             const getTime = (t: any) => {
                 if (!t) return 0;
-                if (t.seconds) return t.seconds * 1000; // Firestore Timestamp
-                if (typeof t.getTime === 'function') return t.getTime(); // JS Date object
+                if (t.seconds) return t.seconds * 1000;
+                if (typeof t.getTime === 'function') return t.getTime();
                 return 0;
             };
 
@@ -114,7 +103,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
     }
   }, [isAdmin, showSettings]);
 
-  // Add/Unban User Logic
   const handleAddUser = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!newUserEmail || !newUserEmail.includes('@')) {
@@ -122,13 +110,11 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           return;
       }
       try {
-          // Khi admin thêm tay, ta cũng tạo document để lưu vĩnh viễn
           await setDoc(doc(db, "allowed_users", newUserEmail), {
               email: newUserEmail,
               banned: false,
               addedByAdminAt: new Date()
           }, { merge: true });
-          
           setNewUserEmail('');
           alert(`Đã thêm/cấp quyền cho ${newUserEmail}`);
       } catch (error) {
@@ -137,9 +123,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
       }
   };
 
-  // Block/Ban User Logic
   const handleBlockUser = async (emailToBlock: string) => {
-      // Không cho phép Admin tự xóa chính mình trong giao diện này để tránh lỗi
       if (emailToBlock === user?.email) {
           alert("Bạn không thể chặn chính mình!");
           return;
@@ -147,7 +131,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
 
       if (window.confirm(`Bạn muốn CHẶN quyền truy cập của ${emailToBlock}?\n\nNgười dùng này sẽ biến mất khỏi danh sách và không thể đăng nhập nữa.`)) {
           try {
-              // Soft delete: Chỉ đánh dấu banned = true, không xóa khỏi DB
               await updateDoc(doc(db, "allowed_users", emailToBlock), {
                   banned: true,
                   bannedAt: new Date()
@@ -238,35 +221,61 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
     return () => clearTimeout(timer);
   }, [driveLink]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const generateSessionId = () => {
+      // Tạo mã ngẫu nhiên 6 ký tự (VD: A7X2M9)
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Bỏ các ký tự dễ nhầm (I, O, 1, 0)
+      let result = '';
+      for (let i = 0; i < 6; i++) {
+          result += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return result;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (status === 'success' && folderMetadata) {
-      const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://luomphotos.com';
-      const baseUrl = currentUrl.split('?')[0].split('#')[0];
+      setIsCreating(true);
       
-      // TẠO URL CHUẨN
-      let finalUrl = `${baseUrl}#?album=${folderMetadata.id}`;
+      // 1. Tạo Session ID
+      const sessionId = generateSessionId();
       
-      if (limitPhotos && maxPhotoCount > 0) {
-          finalUrl += `&limit=${maxPhotoCount}`;
+      // 2. Lưu Mapping vào Firestore (Bảng 'sessions' thay vì 'albums')
+      try {
+          await setDoc(doc(db, "sessions", sessionId), {
+              sessionId: sessionId,
+              driveFolderId: folderMetadata.id,
+              albumName: folderMetadata.name,
+              createdAt: Timestamp.now(),
+              createdBy: user?.email || 'anonymous',
+              settings: {
+                  allowDownload,
+                  allowDownloadOriginal,
+                  allowDownloadRaw,
+                  allowComment,
+                  limitPhotos: limitPhotos ? maxPhotoCount : null
+              }
+          });
+
+          // 3. Tạo Link
+          const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://luomphotos.com';
+          const baseUrl = currentUrl.split('?')[0].split('#')[0];
+          const finalUrl = `${baseUrl}?session=${sessionId}`;
+          
+          setCreatedSessionId(sessionId);
+          setCreatedLink(finalUrl);
+      } catch (error) {
+          console.error("Lỗi khi tạo phiên trên Firestore:", error);
+          alert("Lỗi: Không thể lưu thông tin phiên vào hệ thống.");
+      } finally {
+          setIsCreating(false);
       }
 
-      if (allowComment) {
-          finalUrl += `&comments=1`;
-      }
-      
-      setCreatedLink(finalUrl);
     } else {
       if (status === 'error') {
         alert(errorMessage || 'Vui lòng kiểm tra lại đường dẫn.');
       } else if (!apiKey) {
-        if (isAdmin) {
-            setShowSettings(true);
-            alert('Vui lòng nhập Google API Key để tiếp tục.');
-        } else {
-            alert('Hệ thống thiếu API Key. Chỉ Admin mới có quyền cấu hình.');
-        }
+        alert('Thiếu API Key.');
       } else {
          alert('Vui lòng nhập đường dẫn thư mục Google Drive hợp lệ.');
       }
@@ -283,14 +292,14 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
 
   const handleReset = () => {
       setCreatedLink(null);
+      setCreatedSessionId(null);
       setDriveLink('');
-      setPassword('');
       setFolderMetadata(null);
       setStatus('idle');
   };
 
   // --- RENDER SUCCESS VIEW ---
-  if (createdLink && folderMetadata) {
+  if (createdLink && folderMetadata && createdSessionId) {
       return (
         <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-2xl p-6 md:p-8 w-full border border-gray-100 relative overflow-hidden animate-in fade-in zoom-in-95 duration-300">
              <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10 pointer-events-none"></div>
@@ -300,8 +309,8 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                     <CheckCircle className="w-10 h-10 text-green-600" />
                 </div>
                 
-                <h2 className="text-2xl font-bold text-gray-800 mb-1">Tạo Album Thành Công!</h2>
-                <p className="text-gray-500 text-sm mb-6">Album của bạn đã sẵn sàng để chia sẻ.</p>
+                <h2 className="text-2xl font-bold text-gray-800 mb-1">Session Đã Được Tạo!</h2>
+                <p className="text-gray-500 text-sm mb-6">Mã phiên (Session ID) được lưu trữ trên hệ thống.</p>
 
                 {/* Folder Info Card */}
                 <div className="w-full bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6 flex items-start text-left">
@@ -310,25 +319,28 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                     </div>
                     <div>
                         <h3 className="font-bold text-gray-800 text-lg leading-tight">{folderMetadata.name}</h3>
-                        <p className="text-sm text-gray-600 mt-1">
-                            {folderMetadata.count} ảnh • {allowComment ? 'Cho phép bình luận' : 'Không bình luận'} • {limitPhotos ? `Giới hạn ${maxPhotoCount} ảnh` : 'Không giới hạn'}
-                        </p>
+                        <div className="flex flex-col mt-1 gap-1">
+                            <span className="text-xs text-gray-500">Mã Drive gốc: {folderMetadata.id.substring(0, 8)}...</span>
+                            <span className="text-sm font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded w-fit">
+                                MÃ PHIÊN: {createdSessionId}
+                            </span>
+                        </div>
                     </div>
                 </div>
 
                 {/* Copy Link Section */}
                 <div className="w-full space-y-2 mb-8">
-                    <label className="block text-sm font-medium text-gray-700 text-left pl-1">Link gửi cho khách hàng</label>
+                    <label className="block text-sm font-medium text-gray-700 text-left pl-1">Link Chia Sẻ Cho Khách</label>
                     <div className="flex shadow-sm rounded-md transition-all duration-200 ring-1 ring-gray-300 focus-within:ring-2 focus-within:ring-green-500">
                         <div className="flex-grow relative">
                              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                <Share2 className="h-4 w-4 text-gray-400" />
+                                <LinkIcon className="h-4 w-4 text-gray-400" />
                             </div>
                             <input
                                 type="text"
                                 readOnly
                                 value={createdLink}
-                                className="block w-full pl-10 sm:text-sm border-none rounded-l-md bg-white text-gray-600 py-3 focus:ring-0"
+                                className="block w-full pl-10 sm:text-sm border-none rounded-l-md bg-white text-gray-600 py-3 focus:ring-0 font-mono text-lg md:text-xl font-bold tracking-tight text-center md:text-left"
                             />
                         </div>
                         <button
@@ -340,11 +352,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                         </button>
                     </div>
                     <p className="text-xs text-gray-500 text-left pl-1">
-                        {isBlobUrl ? (
-                            <span className="text-amber-600 font-medium">Lưu ý: Bạn đang chạy trên môi trường xem trước (Blob). Link này chỉ hoạt động trên tab hiện tại.</span>
-                        ) : (
-                            <span>Khách hàng truy cập link này để chọn ảnh. Chế độ: <strong>Công Khai (Mọi người cùng thấy)</strong>.</span>
-                        )}
+                        Dữ liệu chọn ảnh sẽ được lưu vào bảng <strong>selections</strong> với Session ID này.
                     </p>
                 </div>
 
@@ -355,16 +363,16 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                         className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
                     >
                         <RefreshCw className="w-4 h-4 mr-2" />
-                        Tạo Album Khác
+                        Tạo Session Khác
                     </button>
                     <a
                         href={createdLink}
-                        target={isBlobUrl ? "_self" : "_blank"} // Fix for Blob URL: Prevent new tab opening which causes ERR_FILE_NOT_FOUND
+                        target={isBlobUrl ? "_self" : "_blank"} 
                         rel="noreferrer"
                         className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none"
                     >
                         <ExternalLink className="w-4 h-4 mr-2" />
-                        Mở Album Ngay
+                        Vào Xem Album
                     </a>
                 </div>
              </div>
@@ -375,16 +383,14 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   // --- RENDER FORM ---
   return (
     <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-2xl p-6 md:p-8 w-full border border-gray-100 relative overflow-hidden">
-      {/* Subtle texture for the card background */}
       <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10 pointer-events-none"></div>
 
       <div className="relative z-10">
         <div className="flex justify-between items-start mb-8">
-            <div className="w-8"></div> {/* Spacer for centering */}
+            <div className="w-8"></div>
             <h2 className="text-2xl md:text-3xl font-light text-center text-gray-700 tracking-wide uppercase flex-1">
             Bắt Đầu Tạo Album Ảnh
             </h2>
-            {/* LOGIC: CHỈ ADMIN MỚI THẤY NÚT SETTINGS */}
             {isAdmin && (
                 <button 
                     onClick={() => setShowSettings(!showSettings)}
@@ -413,15 +419,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                 </div>
 
                 <div className="p-4 space-y-6">
-                    {/* Admin User Info */}
-                    <div className="text-xs text-gray-500 pb-2 border-b border-gray-200">
-                        <div className="flex items-center">
-                            <Users className="w-3 h-3 mr-1" />
-                            Admin đang đăng nhập: <strong className="ml-1 text-gray-700">{user?.email}</strong>
-                        </div>
-                    </div>
-
-                    {/* SECTION 1: GOOGLE API KEY */}
                     <div>
                         <label className="text-xs font-bold text-gray-600 uppercase flex items-center mb-1">
                             Google API Key
@@ -447,17 +444,12 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                         </p>
                     </div>
 
-                    {/* SECTION 2: USER MANAGEMENT (ACTIVE USERS) */}
                     <div className="pt-2 border-t border-gray-200">
                         <label className="text-xs font-bold text-gray-600 uppercase flex items-center mb-2">
                             <Users className="w-3.5 h-3.5 mr-1" />
                             Danh sách người dùng
                         </label>
-                        <p className="text-[10px] text-gray-500 mb-3">
-                            Tất cả người dùng đã từng đăng nhập vào hệ thống.
-                        </p>
-
-                        {/* Add/Unban User Form */}
+                        
                         <form onSubmit={handleAddUser} className="flex gap-2 mb-3">
                             <input 
                                 type="email" 
@@ -475,7 +467,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                             </button>
                         </form>
 
-                        {/* User List */}
                         <div className="bg-white border border-gray-200 rounded max-h-48 overflow-y-auto custom-scrollbar">
                             {loadingUsers ? (
                                 <div className="p-3 text-center text-xs text-gray-400">Đang tải danh sách...</div>
@@ -486,7 +477,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                                     {activeUsers.map((u) => (
                                         <li key={u.email} className={`px-3 py-2 flex justify-between items-center hover:bg-gray-50 text-sm group ${u.email === user?.email ? 'bg-blue-50/50' : ''}`}>
                                             <div className="flex items-center overflow-hidden mr-2">
-                                                {/* Avatar (if available) */}
                                                 {u.photoURL ? (
                                                     <img src={u.photoURL} alt="" className="w-6 h-6 rounded-full mr-2 border border-gray-200" />
                                                 ) : (
@@ -499,20 +489,8 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                                                         <span className="text-gray-700 truncate font-medium">{u.email}</span>
                                                         {u.email === user?.email && <span className="ml-2 text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded">Bạn</span>}
                                                     </div>
-                                                    {u.lastLogin && (
-                                                        <span className="text-[10px] text-gray-400 flex items-center">
-                                                            <History className="w-3 h-3 mr-0.5 inline" />
-                                                            {/* Check if lastLogin is Timestamp or Date */}
-                                                            {u.lastLogin.seconds 
-                                                                ? new Date(u.lastLogin.seconds * 1000).toLocaleString('vi-VN') 
-                                                                : new Date(u.lastLogin).toLocaleString('vi-VN')
-                                                            }
-                                                        </span>
-                                                    )}
                                                 </div>
                                             </div>
-                                            
-                                            {/* Delete Button (Disable if it's the current admin user) */}
                                             {u.email !== user?.email && (
                                                 <button 
                                                     onClick={() => handleBlockUser(u.email)}
@@ -533,8 +511,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          
-          {/* Google Drive Link Input */}
           <div className="space-y-2">
             <div className="flex flex-col md:flex-row md:justify-between md:items-end text-sm gap-1">
                <label className="text-gray-700 font-medium">
@@ -562,7 +538,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                 value={driveLink}
                 onChange={(e) => setDriveLink(e.target.value)}
               />
-              {/* Status Indicator Icon */}
               <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
                 {status === 'checking' && <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />}
                 {status === 'success' && <CheckCircle className="w-5 h-5 text-green-500" />}
@@ -570,7 +545,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
               </div>
             </div>
 
-            {/* Metadata Display */}
             {status === 'success' && folderMetadata && (
               <div className="mt-2 bg-green-50 border border-green-100 rounded-md p-3 flex items-start text-sm text-green-800 animate-fadeIn">
                 <FolderOpen className="w-5 h-5 mr-2 text-green-600 flex-shrink-0 mt-0.5" />
@@ -584,7 +558,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
               </div>
             )}
             
-            {/* Error Display */}
             {status === 'error' && errorMessage && (
               <div className="mt-2 bg-red-50 border border-red-100 rounded-md p-3 flex items-start text-sm text-red-800 animate-fadeIn">
                 <AlertCircle className="w-5 h-5 mr-2 text-red-600 flex-shrink-0 mt-0.5" />
@@ -596,26 +569,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             )}
           </div>
 
-          {/* Password Input */}
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Mật Khẩu (Tùy chọn)</label>
-            <div className="relative group">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Key className="w-4 h-4 text-gray-500" />
-              </div>
-              <input
-                type="password"
-                className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-md leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 sm:text-sm shadow-sm group-hover:border-gray-400"
-                placeholder="Nhập mật khẩu để bảo vệ album..."
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Options Switches */}
           <div className="space-y-4 pt-4 border-t border-gray-100">
-            {/* DOWNLOAD OPTION */}
             <div>
               <div className="flex items-center justify-between group cursor-pointer" onClick={() => setAllowDownload(!allowDownload)}>
                 <div className="flex items-center text-gray-700 group-hover:text-green-700 transition-colors">
@@ -627,10 +581,8 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                 <Switch checked={allowDownload} onChange={setAllowDownload} />
               </div>
               
-              {/* SUB OPTIONS FOR DOWNLOAD */}
               {allowDownload && (
                 <div className="mt-3 ml-12 space-y-3 animate-in fade-in slide-in-from-top-1">
-                   {/* Info Notification */}
                    <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700 flex items-start">
                       <Info className="w-4 h-4 mr-2 mt-0.5 flex-shrink-0 text-blue-500" />
                       <span>Thông báo: Bạn đang cho phép người xem tải về file RAW và ảnh chất lượng gốc.</span>
@@ -668,7 +620,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
               )}
             </div>
 
-            {/* COMMENT OPTION */}
             <div>
               <div className="flex items-center justify-between group cursor-pointer" onClick={() => setAllowComment(!allowComment)}>
                 <div className="flex items-center text-gray-700 group-hover:text-green-700 transition-colors">
@@ -690,7 +641,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
               )}
             </div>
 
-            {/* LIMIT PHOTOS OPTION */}
             <div>
               <div className="flex items-center justify-between group cursor-pointer" onClick={() => setLimitPhotos(!limitPhotos)}>
                 <div className="flex items-center text-gray-700 group-hover:text-green-700 transition-colors">
@@ -723,22 +673,21 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             </div>
           </div>
 
-          {/* Action Button */}
           <div className="flex flex-col items-center justify-center pt-6">
             <button
               type="submit"
-              disabled={status === 'checking' || (status === 'error' && driveLink.length > 0)}
+              disabled={status === 'checking' || (status === 'error' && driveLink.length > 0) || isCreating}
               className={`inline-flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-full shadow-lg text-white transform transition-all duration-200
-                ${status === 'checking' || (status === 'error' && driveLink.length > 0)
+                ${status === 'checking' || (status === 'error' && driveLink.length > 0) || isCreating
                   ? 'bg-gray-400 cursor-not-allowed' 
                   : 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500'
                 }
               `}
             >
-              {status === 'checking' ? (
+              {(status === 'checking' || isCreating) ? (
                 <>
                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                   ĐANG KIỂM TRA...
+                   {isCreating ? 'ĐANG TẠO SESSION...' : 'ĐANG KIỂM TRA...'}
                 </>
               ) : (
                 <>
@@ -749,7 +698,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             </button>
           </div>
 
-          {/* Info Alert */}
           <div className="bg-blue-50/50 border border-blue-100 rounded-lg p-3 flex items-start justify-center text-blue-800 text-xs mt-4">
              <Info className="w-4 h-4 mr-2 flex-shrink-0 mt-0.5" />
              <span>Lưu ý: Hệ thống đọc file trực tiếp từ Google Drive API. Đảm bảo thư mục ở chế độ "Công khai" (Anyone with the link).</span>
@@ -757,7 +705,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
 
         </form>
 
-        {/* Modal Hướng Dẫn - Sử dụng biến showGuide để fix lỗi TS6133 */}
         {showGuide && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowGuide(false)}>
                 <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full animate-in fade-in zoom-in-95" onClick={e => e.stopPropagation()}>

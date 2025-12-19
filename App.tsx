@@ -21,26 +21,43 @@ const App: React.FC = () => {
             if (typeof window === 'undefined') return { id: null, ref: null };
             let id = null;
             let ref = null;
-            let params: URLSearchParams | null = null;
+            
+            // Ưu tiên 1: Đọc từ Query Params chuẩn (?session=...)
+            const searchParams = new URLSearchParams(window.location.search);
+            if (searchParams.has('session')) {
+                id = searchParams.get('session')?.trim() || null;
+            } else if (searchParams.has('album')) {
+                id = searchParams.get('album')?.trim() || null;
+            }
 
-            // Ưu tiên đọc từ Hash (do cấu trúc #?album=...)
-            if (window.location.hash && window.location.hash.includes('album=')) {
+            // Ưu tiên 2: Fallback đọc từ Hash (cũ) (#?album=...)
+            if (!id && window.location.hash) {
                 const hash = window.location.hash;
                 const parts = hash.includes('?') ? hash.split('?') : [hash];
+                let hashParams = null;
                 if (parts.length > 1) {
-                    params = new URLSearchParams(parts[1]);
+                    hashParams = new URLSearchParams(parts[1]);
                 } else {
                      const cleanHash = hash.substring(1); 
-                     params = new URLSearchParams(cleanHash);
+                     hashParams = new URLSearchParams(cleanHash);
                 }
-            } else {
-                // Fallback đọc từ Search query (?album=...)
-                params = new URLSearchParams(window.location.search);
+                
+                if (hashParams) {
+                    if (hashParams.get('album')) id = hashParams.get('album')?.trim() || null;
+                    if (hashParams.get('session')) id = hashParams.get('session')?.trim() || null;
+                }
             }
             
-            if (params) {
-                if (params.get('album')) id = params.get('album')?.trim() || null;
-                if (params.get('ref')) ref = params.get('ref')?.trim() || null;
+            // Lấy thêm ref nếu có (từ search params hoặc hash params đều được)
+            if (searchParams.get('ref')) {
+                ref = searchParams.get('ref')?.trim() || null;
+            } else if (!ref && window.location.hash) {
+                 // Logic lặp lại chút để lấy ref từ hash nếu chưa có
+                 const parts = window.location.hash.split('?');
+                 if(parts.length > 1) {
+                     const hp = new URLSearchParams(parts[1]);
+                     if(hp.get('ref')) ref = hp.get('ref');
+                 }
             }
             
             return { id, ref };
@@ -53,12 +70,13 @@ const App: React.FC = () => {
     const handleUrlChange = () => {
         const { id, ref } = parseUrlParams();
         setAlbumId(id);
-        setAlbumRef(ref); // Cập nhật ref
-        window.scrollTo(0, 0);
+        setAlbumRef(ref); 
+        // Không scroll top ngay lập tức để tránh giật nếu đang thao tác
     };
 
     handleUrlChange();
     window.addEventListener('popstate', handleUrlChange);
+    // Vẫn lắng nghe hashchange để hỗ trợ link cũ
     window.addEventListener('hashchange', handleUrlChange);
 
     // --- SAFETY TIMEOUT ---
