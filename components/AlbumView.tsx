@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User } from 'lucide-react';
 import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
@@ -26,10 +26,12 @@ interface Comment {
 }
 
 export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
-  const [photos, setPhotos] = useState<Photo[]>([]);
+  // Tách biệt nguồn dữ liệu để tránh xung đột
+  const [drivePhotos, setDrivePhotos] = useState<Photo[]>([]); // Dữ liệu gốc từ Drive
+  const [photoStates, setPhotoStates] = useState<Map<string, {isSelected: boolean, isFavorite: boolean}>>(new Map()); // Dữ liệu từ Firestore
+  
   const [loading, setLoading] = useState(true);
   const [albumName, setAlbumName] = useState('Đang tải...');
-  const [selectedCount, setSelectedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [maxSelection, setMaxSelection] = useState<number | null>(null);
   
@@ -48,15 +50,30 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   // Swipe gesture refs
   const touchStartX = useRef<number>(0);
   const touchEndX = useRef<number>(0);
-  const minSwipeDistance = 50; // Minimum px to register a swipe
+  const minSwipeDistance = 50; 
+
+  // --- KẾT HỢP DỮ LIỆU ---
+  // Merge dữ liệu từ Drive và Firestore mỗi khi có thay đổi
+  const photos = useMemo(() => {
+      return drivePhotos.map(p => {
+          const state = photoStates.get(p.id);
+          return {
+              ...p,
+              isSelected: state?.isSelected || false,
+              isFavorite: state?.isFavorite || false
+          };
+      });
+  }, [drivePhotos, photoStates]);
+
+  const selectedCount = useMemo(() => photos.filter(p => p.isSelected).length, [photos]);
 
   // 1. Fetch Basic Photo Data from Google Drive
   useEffect(() => {
     const fetchPhotos = async () => {
       setLoading(true);
       setError(null);
+      setDrivePhotos([]); // Reset khi đổi album
       
-      // Parse params from URL
       try {
         const currentHash = window.location.hash;
         const searchParams = new URLSearchParams(currentHash.split('?')[1] || window.location.search);
@@ -109,15 +126,14 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
            if (imagesRes.ok) {
              const imagesData = await imagesRes.json();
              if (imagesData.files && imagesData.files.length > 0) {
-               // Map Drive Data (State will be updated by Firestore later)
                const mappedPhotos = imagesData.files.map((f: any) => ({
                    id: f.id,
                    url: `https://lh3.googleusercontent.com/d/${f.id}`,
                    name: f.name,
-                   isFavorite: false, // Default value, will be synced
-                   isSelected: false  // Default value, will be synced
+                   isFavorite: false, 
+                   isSelected: false
                }));
-               setPhotos(mappedPhotos);
+               setDrivePhotos(mappedPhotos);
              } else {
                setError("Thư mục này trống.");
              }
@@ -128,8 +144,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
           console.error("Error fetching from Drive", e);
           setError(e.message || "Đã xảy ra lỗi khi tải album.");
       } finally {
-          // Do not stop loading immediately if we want to wait for Firestore sync, 
-          // but for UX better to show photos then update state.
           setLoading(false);
       }
     };
@@ -143,40 +157,22 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
   }, [albumId]);
 
   // 2. Firestore Listener: Sync Selections & Favorites Real-time
+  // Độc lập hoàn toàn với việc load ảnh từ Drive
   useEffect(() => {
-      if (!albumId || photos.length === 0) return;
+      if (!albumId) return;
 
-      // Listen to 'album_photo_states' collection where albumId matches
       const q = query(collection(db, "album_photo_states"), where("albumId", "==", albumId));
 
       const unsubscribe = onSnapshot(q, (snapshot) => {
-          // Create a map of states: photoId -> { isSelected, isFavorite }
-          const stateMap = new Map();
+          const newStateMap = new Map();
           snapshot.forEach((doc) => {
-              stateMap.set(doc.data().photoId, doc.data());
+              newStateMap.set(doc.data().photoId, doc.data());
           });
-
-          // Update photos array
-          setPhotos((prevPhotos) => {
-              const updatedPhotos = prevPhotos.map((p) => {
-                  const state = stateMap.get(p.id);
-                  return {
-                      ...p,
-                      isSelected: state?.isSelected || false,
-                      isFavorite: state?.isFavorite || false
-                  };
-              });
-              
-              // Update selected count based on new data
-              const count = updatedPhotos.filter(p => p.isSelected).length;
-              setSelectedCount(count);
-              
-              return updatedPhotos;
-          });
+          setPhotoStates(newStateMap);
       });
 
       return () => unsubscribe();
-  }, [albumId, loading]); // Wait until loading finishes (or at least photos are init)
+  }, [albumId]);
 
   // Firestore Realtime Comments Listener
   useEffect(() => {
@@ -260,12 +256,11 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
     }
   }, [lightboxIndex]);
 
-  // UPDATE: Writes to Firestore instead of LocalStorage
+  // Write to Firestore
   const toggleFavorite = async (id: string) => {
     const photo = photos.find(p => p.id === id);
     if (!photo) return;
 
-    // Use a composite key to store state for this specific photo in this album
     const docRef = doc(db, "album_photo_states", `${albumId}_${id}`);
     
     try {
@@ -273,18 +268,18 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
             albumId: albumId,
             photoId: id,
             isFavorite: !photo.isFavorite
-        }, { merge: true }); // merge: true preserves isSelected if it exists
+        }, { merge: true });
+        // Không cần update state local, onSnapshot sẽ tự lo việc đó
     } catch (e) {
         console.error("Lỗi lưu trạng thái tim:", e);
     }
   };
 
-  // UPDATE: Writes to Firestore instead of LocalStorage
+  // Write to Firestore
   const toggleSelect = async (id: string) => {
     const photo = photos.find(p => p.id === id);
     if (!photo) return;
 
-    // Check limit based on current local state
     if (!photo.isSelected && maxSelection !== null && selectedCount >= maxSelection) {
          alert(`Album này giới hạn chỉ được chọn tối đa ${maxSelection} ảnh.`);
          return;
@@ -297,7 +292,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId }) => {
             albumId: albumId,
             photoId: id,
             isSelected: !photo.isSelected
-        }, { merge: true }); // merge: true preserves isFavorite if it exists
+        }, { merge: true });
     } catch (e) {
         console.error("Lỗi lưu trạng thái chọn:", e);
     }
