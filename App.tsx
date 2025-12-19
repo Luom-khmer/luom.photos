@@ -4,7 +4,7 @@ import { Footer } from './components/Footer';
 import { CreateAlbumForm } from './components/CreateAlbumForm';
 import { AlbumView } from './components/AlbumView';
 import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, User, signInAnonymously } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
@@ -56,56 +56,65 @@ const App: React.FC = () => {
     // 2. Firebase Auth Listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // Cập nhật UI ngay lập tức
-        setCurrentUser(user);
+        // Kiểm tra loại user
+        if (user.isAnonymous) {
+            // Nếu là ẩn danh: Vẫn giữ currentUser là null để UI không hiện thông tin user
+            // Nhưng Firebase SDK đã có token để ghi vào Firestore
+            console.log("Silent Anonymous Auth Active");
+            setCurrentUser(null);
+        } else {
+            // Nếu là user thật (Google Login)
+            setCurrentUser(user);
 
-        // Chỉ xử lý logic lưu user nếu là đăng nhập Google (có email)
-        if (user.email) {
-            const email = user.email;
-            const userDocRef = doc(db, 'allowed_users', email);
+            // Logic lưu user admin/google
+            if (user.email) {
+                const email = user.email;
+                const userDocRef = doc(db, 'allowed_users', email);
 
-            try {
-                // Lấy dữ liệu hiện tại để kiểm tra trạng thái BAN
-                const userDocSnapshot = await getDoc(userDocRef);
-                const userData = userDocSnapshot.exists() ? userDocSnapshot.data() : null;
+                try {
+                    const userDocSnapshot = await getDoc(userDocRef);
+                    const userData = userDocSnapshot.exists() ? userDocSnapshot.data() : null;
 
-                // Nếu bị ban và không phải Admin -> Logout
-                if (!ADMIN_EMAILS.includes(email) && userData && userData.banned === true) {
-                    await logoutUser();
-                    setCurrentUser(null);
-                    alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
-                    return;
+                    if (!ADMIN_EMAILS.includes(email) && userData && userData.banned === true) {
+                        await logoutUser();
+                        setCurrentUser(null);
+                        alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
+                        return;
+                    }
+
+                    const payload: any = { 
+                        email: email,
+                        lastLogin: new Date(),
+                        photoURL: user.photoURL || '',
+                        displayName: user.displayName || '',
+                    };
+
+                    if (!userDocSnapshot.exists()) {
+                        payload.createdAt = new Date();
+                        payload.banned = false;
+                    }
+
+                    await setDoc(userDocRef, payload, { merge: true });
+
+                } catch (error) {
+                    console.error("Lỗi lưu dữ liệu người dùng vào Firestore:", error);
                 }
-
-                const payload: any = { 
-                    email: email,
-                    lastLogin: new Date(),
-                    photoURL: user.photoURL || '',
-                    displayName: user.displayName || '',
-                };
-
-                if (!userDocSnapshot.exists()) {
-                    payload.createdAt = new Date();
-                    payload.banned = false;
-                }
-
-                await setDoc(userDocRef, payload, { merge: true });
-
-            } catch (error) {
-                console.error("Lỗi lưu dữ liệu người dùng vào Firestore:", error);
             }
         }
       } else {
-        // Người dùng chưa đăng nhập (Khách)
-        // Đã xóa logic đăng nhập ẩn danh theo yêu cầu
+        // Không có user nào (kể cả ẩn danh) -> Kích hoạt đăng nhập ẩn danh ngầm
+        // Điều này cần thiết để Firestore cho phép ghi dữ liệu (theo Rules mặc định)
         setCurrentUser(null);
+        signInAnonymously(auth).catch((error) => {
+            console.error("Lỗi kích hoạt chế độ khách:", error);
+        });
       }
     });
 
     return () => {
         window.removeEventListener('popstate', handleUrlChange);
         window.removeEventListener('hashchange', handleUrlChange);
-        unsubscribe(); // Cleanup auth listener
+        unsubscribe(); 
     };
   }, []);
 
@@ -120,6 +129,7 @@ const App: React.FC = () => {
 
   const handleLogout = async () => {
     await logoutUser();
+    // Sau khi logout Google, Auth Listener sẽ chạy vào block 'else' và tự động sign in Anonymously lại
   };
 
   return (
