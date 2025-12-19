@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon } from 'lucide-react';
+import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon, Users, Cloud } from 'lucide-react';
 import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { User } from 'firebase/auth';
@@ -53,23 +53,20 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   const touchEndX = useRef<number>(0);
   const minSwipeDistance = 50; 
 
-  // --- LOGIC MỚI: CHẾ ĐỘ DÙNG CHUNG (SHARED STATE) ---
-  // Thay vì dùng user.uid (làm mỗi người 1 vẻ), ta dùng từ khóa cố định 'global'.
-  // Điều này đảm bảo Khách A, Khách B và Admin đều nhìn thấy và thao tác trên cùng 1 dữ liệu.
+  // --- LOGIC QUAN TRỌNG: XÁC ĐỊNH PHẠM VI DỮ LIỆU (SCOPE) ---
+  // Nếu URL có đuôi &ref=nhomA -> Scope là 'nhomA' (Chỉ nhóm A thấy nhau)
+  // Nếu URL KHÔNG có ref -> Scope là 'public_shared' (Tất cả mọi người dùng chung 1 link đều thấy nhau)
   const sessionScope = useMemo(() => {
-      // Nếu link có mã ref đặc biệt (ví dụ chia sẻ riêng tư &ref=teamA), dùng ref đó.
-      if (albumRef) return albumRef;
-      
-      // MẶC ĐỊNH: 'global'. 
-      // Mọi user không có ref sẽ chui vào đây. Dữ liệu được đồng bộ cho tất cả.
-      return 'global';
+      return albumRef ? albumRef : 'public_shared';
   }, [albumRef]);
 
-  // LOCAL STORAGE KEY: Dùng chung cho phiên này
+  const isPublicMode = sessionScope === 'public_shared';
+
+  // LOCAL STORAGE KEY: Chỉ dùng để cache hiển thị nhanh, không phải nguồn dữ liệu chính
   const SESSION_KEY = `${albumId}_${sessionScope}`;
   const LOCAL_STORAGE_KEY = `luom_album_state_${SESSION_KEY}`;
 
-  // 1. Load LocalStorage (Để phản hồi nhanh)
+  // 1. Load LocalStorage (Cache)
   useEffect(() => {
       try {
           const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -80,13 +77,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
                   parsed.forEach((item: any) => {
                       if(item.photoId) localMap.set(item.photoId, item);
                   });
-                  setPhotoStates(prev => {
-                      const newMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(prev);
-                      localMap.forEach((v, k) => {
-                           newMap.set(k, v);
-                      });
-                      return newMap;
-                  });
+                  setPhotoStates(localMap);
               }
           }
       } catch (e) {
@@ -218,7 +209,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   useEffect(() => {
       if (!albumId) return;
 
-      // QUERY: Lọc theo sessionScope ('global' hoặc ref)
+      // QUERY: Lấy tất cả trạng thái ảnh thuộc về album này và scope này
       const q = query(
           collection(db, "album_photo_states"), 
           where("albumId", "==", albumId),
@@ -227,7 +218,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
 
       const unsubscribe = onSnapshot(q, (snapshot) => {
           setPhotoStates(prev => {
+             // Tạo map mới từ prev (Local cache)
              const nextMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(prev);
+             
+             // Ghi đè bằng dữ liệu từ Server (Source of Truth)
              snapshot.forEach((doc) => {
                  const data = doc.data();
                  if (data.photoId) {
@@ -240,6 +234,8 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
              syncToLocalStorage(nextMap);
              return nextMap;
           });
+      }, (error) => {
+          console.error("Lỗi đồng bộ Firestore:", error);
       });
 
       return () => unsubscribe();
@@ -316,8 +312,8 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   }, [lightboxIndex]);
 
   // --- HÀM LƯU DỮ LIỆU ---
-  // Helper để tạo Doc ID duy nhất: AlbumID + SessionScope + PhotoID
-  // Ví dụ: 12345_global_photo001 -> Ai vào cũng ghi đè lên file này -> Đồng bộ hóa.
+  // Sử dụng ID tài liệu CỐ ĐỊNH cho 'public_shared' để mọi người ghi đè lên nhau
+  // ID = albumId_public_shared_photoId
   const getDocId = (photoId: string) => {
       return `${albumId}_${sessionScope}_${photoId}`;
   };
@@ -327,8 +323,9 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     if (!photo) return;
     
     const newState = !photo.isFavorite;
-    const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     
+    // Optimistic UI Update (Cập nhật giao diện ngay lập tức)
+    const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(photoStates);
     tempMap.set(id, { ...currentState, isFavorite: newState });
     setPhotoStates(tempMap);
@@ -337,16 +334,19 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     const docRef = doc(db, "album_photo_states", getDocId(id));
     
     try {
+        // Ghi lên Server
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            ref: sessionScope, // Luôn là 'global' nếu không có ref
+            ref: sessionScope, // Luôn lưu với scope hiện tại
             isFavorite: newState,
             updatedAt: Timestamp.now(),
-            updatedBy: user?.uid || 'anonymous'
+            updatedBy: user?.uid || 'anonymous',
+            updatedByEmail: user?.email || 'guest'
         }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu trạng thái tim:", e);
+        // Nếu lỗi, revert UI (tuỳ chọn, ở đây giữ đơn giản)
     }
   };
 
@@ -360,8 +360,9 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     }
     
     const newState = !photo.isSelected;
-    const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     
+    // Optimistic UI Update
+    const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(photoStates);
     tempMap.set(id, { ...currentState, isSelected: newState });
     setPhotoStates(tempMap);
@@ -373,10 +374,11 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            ref: sessionScope, // Luôn là 'global' nếu không có ref
+            ref: sessionScope, 
             isSelected: newState,
             updatedAt: Timestamp.now(),
-            updatedBy: user?.uid || 'anonymous'
+            updatedBy: user?.uid || 'anonymous',
+            updatedByEmail: user?.email || 'guest'
         }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu trạng thái chọn:", e);
@@ -501,6 +503,23 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
             )}
         </h1>
         
+        {/* THANH TRẠNG THÁI SCOPE */}
+        <div className="flex justify-center mt-2">
+            <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-[10px] md:text-xs font-medium border ${isPublicMode ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-purple-100 text-purple-800 border-purple-200'}`}>
+                {isPublicMode ? (
+                    <>
+                        <Cloud className="w-3 h-3" />
+                        <span>Chế độ Công khai: Mọi người đều thấy lựa chọn của nhau</span>
+                    </>
+                ) : (
+                    <>
+                        <Users className="w-3 h-3" />
+                        <span>Chế độ Nhóm: {sessionScope}</span>
+                    </>
+                )}
+            </div>
+        </div>
+
         <div className="flex justify-center mt-3 space-x-2 md:space-x-4">
             <button
                 onClick={() => setFilterMode('all')}
