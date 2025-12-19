@@ -5,7 +5,7 @@ import { CreateAlbumForm } from './components/CreateAlbumForm';
 import { AlbumView } from './components/AlbumView';
 import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
   const [albumId, setAlbumId] = useState<string | null>(null);
@@ -49,47 +49,47 @@ const App: React.FC = () => {
 
     // 2. Firebase Auth Listener with Auto-Register & Ban Check
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        // CẬP NHẬT UI NGAY LẬP TỨC ĐỂ TRÁNH ĐỘ TRỄ
+      if (user && user.email) {
+        // CẬP NHẬT UI NGAY LẬP TỨC
         setCurrentUser(user);
 
-        const email = user.email || '';
+        const email = user.email;
         const userDocRef = doc(db, 'allowed_users', email);
 
-        // XỬ LÝ DATABASE DƯỚI NỀN (BACKGROUND)
+        // XỬ LÝ DATABASE (QUAN TRỌNG: Dùng setDoc merge để đảm bảo luôn lưu)
         try {
-            const userDoc = await getDoc(userDocRef);
-            
-            // Logic kiểm tra BAN (Chặn)
-            // Nếu bị ban và không phải Admin -> Logout ngược lại
-            if (!ADMIN_EMAILS.includes(email) && userDoc.exists() && userDoc.data().banned === true) {
+            // 1. Kiểm tra trạng thái Ban trước
+            const userDocSnapshot = await getDoc(userDocRef);
+            const userData = userDocSnapshot.exists() ? userDocSnapshot.data() : null;
+
+            // Nếu bị ban và không phải Admin -> Logout và ngừng xử lý
+            if (!ADMIN_EMAILS.includes(email) && userData && userData.banned === true) {
                 await logoutUser();
-                setCurrentUser(null); // Cập nhật lại UI sau khi logout
+                setCurrentUser(null);
                 alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
                 return;
             }
 
-            // Logic Lưu/Cập nhật User vào DB
-            if (userDoc.exists()) {
-                await updateDoc(userDocRef, { 
-                    lastLogin: new Date(),
-                    photoURL: user.photoURL || '',
-                    displayName: user.displayName || ''
-                });
-            } else {
-                await setDoc(userDocRef, { 
-                    email: email, 
-                    banned: false,
-                    createdAt: new Date(),
-                    lastLogin: new Date(),
-                    photoURL: user.photoURL || '',
-                    displayName: user.displayName || ''
-                });
+            // 2. LƯU THÔNG TIN USER (Persistence)
+            // Sử dụng setDoc với { merge: true } để:
+            // - Tạo document mới nếu chưa có (lưu mãi mãi)
+            // - Cập nhật lastLogin nếu đã có
+            // - Không ghi đè trường 'banned' nếu nó đang tồn tại
+            await setDoc(userDocRef, { 
+                email: email,
+                lastLogin: new Date(),
+                photoURL: user.photoURL || '',
+                displayName: user.displayName || '',
+                // Chúng ta không set 'banned' ở đây để tránh bỏ chặn nhầm
+            }, { merge: true });
+
+            // Nếu document chưa từng tồn tại (user mới), set mặc định banned = false
+            if (!userDocSnapshot.exists()) {
+                 await setDoc(userDocRef, { banned: false }, { merge: true });
             }
 
         } catch (error) {
             console.error("Lỗi đồng bộ dữ liệu người dùng:", error);
-            // Nếu lỗi DB nhưng user đã đăng nhập auth thành công, ta vẫn giữ trạng thái đăng nhập ở UI (đã set ở trên)
         }
       } else {
         setCurrentUser(null);
