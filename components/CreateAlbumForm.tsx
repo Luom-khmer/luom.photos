@@ -12,7 +12,8 @@ interface CreateAlbumFormProps {
 // Chỉ những email trong danh sách này mới thấy nút cài đặt API Key.
 const ADMIN_EMAILS = [
     "1touch.pro.vn@gmail.com",
-    "admin@gmail.com" 
+    "admin@gmail.com",
+    "danhluom68g1@gmail.com"
 ];
 
 export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
