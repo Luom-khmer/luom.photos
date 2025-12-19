@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon, Users, Cloud } from 'lucide-react';
+import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon, Users, Cloud, CloudLightning, Activity } from 'lucide-react';
 import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { User } from 'firebase/auth';
@@ -16,6 +16,7 @@ interface Photo {
   name: string;
   isFavorite: boolean;
   isSelected: boolean;
+  lastUpdatedBy?: string; // Thêm thông tin ai đã chọn
 }
 
 interface Comment {
@@ -30,7 +31,8 @@ interface Comment {
 
 export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user }) => {
   const [drivePhotos, setDrivePhotos] = useState<Photo[]>([]);
-  const [photoStates, setPhotoStates] = useState<Map<string, {isSelected: boolean, isFavorite: boolean}>>(new Map());
+  // Map chứa trạng thái ảnh và thông tin người cập nhật
+  const [photoStates, setPhotoStates] = useState<Map<string, {isSelected: boolean, isFavorite: boolean, updatedBy?: string}>>(new Map());
   
   const [loading, setLoading] = useState(true);
   const [albumName, setAlbumName] = useState('Đang tải...');
@@ -49,24 +51,28 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   const filmstripRef = useRef<HTMLDivElement>(null);
   const commentsEndRef = useRef<HTMLDivElement>(null);
 
+  // Trạng thái đồng bộ mạng
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+
   const touchStartX = useRef<number>(0);
   const touchEndX = useRef<number>(0);
   const minSwipeDistance = 50; 
 
-  // --- LOGIC QUAN TRỌNG: XÁC ĐỊNH PHẠM VI DỮ LIỆU (SCOPE) ---
-  // Nếu URL có đuôi &ref=nhomA -> Scope là 'nhomA' (Chỉ nhóm A thấy nhau)
-  // Nếu URL KHÔNG có ref -> Scope là 'public_shared' (Tất cả mọi người dùng chung 1 link đều thấy nhau)
+  // --- LOGIC CỐT LÕI: PUBLIC SHARED SCOPE ---
+  // Nếu không có ref (link gốc), scope sẽ là 'public_shared'.
+  // Tất cả mọi người vào link này sẽ ghi đè lên cùng 1 ID Document.
   const sessionScope = useMemo(() => {
       return albumRef ? albumRef : 'public_shared';
   }, [albumRef]);
 
   const isPublicMode = sessionScope === 'public_shared';
 
-  // LOCAL STORAGE KEY: Chỉ dùng để cache hiển thị nhanh, không phải nguồn dữ liệu chính
+  // LOCAL STORAGE: Chỉ dùng để cache hiển thị tức thì, không phải nguồn chân lý
   const SESSION_KEY = `${albumId}_${sessionScope}`;
-  const LOCAL_STORAGE_KEY = `luom_album_state_${SESSION_KEY}`;
+  const LOCAL_STORAGE_KEY = `luom_album_state_v2_${SESSION_KEY}`;
 
-  // 1. Load LocalStorage (Cache)
+  // 1. Load LocalStorage (Cache) để giảm độ trễ hiển thị ban đầu
   useEffect(() => {
       try {
           const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -92,12 +98,13 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
           return {
               ...p,
               isSelected: state?.isSelected || false,
-              isFavorite: state?.isFavorite || false
+              isFavorite: state?.isFavorite || false,
+              lastUpdatedBy: state?.updatedBy
           };
       });
   }, [drivePhotos, photoStates]);
 
-  const syncToLocalStorage = (currentMap: Map<string, {isSelected: boolean, isFavorite: boolean}>) => {
+  const syncToLocalStorage = (currentMap: Map<string, {isSelected: boolean, isFavorite: boolean, updatedBy?: string}>) => {
       try {
           const arrayData = Array.from(currentMap.entries()).map(([key, value]) => ({
               photoId: key,
@@ -118,7 +125,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   const selectedCount = useMemo(() => photos.filter(p => p.isSelected).length, [photos]);
   const favoriteCount = useMemo(() => photos.filter(p => p.isFavorite).length, [photos]);
 
-  // 2. Fetch from Drive
+  // 2. Fetch from Drive (Giữ nguyên logic lấy ảnh)
   useEffect(() => {
     const fetchPhotos = async () => {
       setLoading(true);
@@ -180,7 +187,8 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
                    url: `https://lh3.googleusercontent.com/d/${f.id}`,
                    name: f.name,
                    isFavorite: false, 
-                   isSelected: false
+                   isSelected: false,
+                   lastUpdatedBy: undefined
                }));
                setDrivePhotos(mappedPhotos);
              } else {
@@ -205,11 +213,13 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     }
   }, [albumId]);
 
-  // 3. Firestore Listener (REAL-TIME SYNC)
+  // 3. Firestore Listener (REAL-TIME SYNC - QUAN TRỌNG NHẤT)
   useEffect(() => {
       if (!albumId) return;
 
-      // QUERY: Lấy tất cả trạng thái ảnh thuộc về album này và scope này
+      setIsSyncing(true);
+      
+      // Query lắng nghe thay đổi theo Scope (Public hoặc Ref)
       const q = query(
           collection(db, "album_photo_states"), 
           where("albumId", "==", albumId),
@@ -217,17 +227,22 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
       );
 
       const unsubscribe = onSnapshot(q, (snapshot) => {
+          setIsSyncing(false);
+          setLastSyncTime(new Date());
+
           setPhotoStates(prev => {
-             // Tạo map mới từ prev (Local cache)
-             const nextMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(prev);
+             // Copy từ state cũ
+             const nextMap = new Map<string, {isSelected: boolean, isFavorite: boolean, updatedBy?: string}>(prev);
              
-             // Ghi đè bằng dữ liệu từ Server (Source of Truth)
              snapshot.forEach((doc) => {
                  const data = doc.data();
                  if (data.photoId) {
+                     // Ghi đè dữ liệu từ Server (Source of Truth)
+                     // Logic này đảm bảo nếu máy khác thay đổi, máy này sẽ cập nhật theo
                      nextMap.set(data.photoId, {
                          isSelected: data.isSelected || false,
-                         isFavorite: data.isFavorite || false
+                         isFavorite: data.isFavorite || false,
+                         updatedBy: data.updatedByEmail || 'Khách'
                      });
                  }
              });
@@ -236,6 +251,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
           });
       }, (error) => {
           console.error("Lỗi đồng bộ Firestore:", error);
+          setIsSyncing(false);
       });
 
       return () => unsubscribe();
@@ -312,8 +328,8 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   }, [lightboxIndex]);
 
   // --- HÀM LƯU DỮ LIỆU ---
-  // Sử dụng ID tài liệu CỐ ĐỊNH cho 'public_shared' để mọi người ghi đè lên nhau
-  // ID = albumId_public_shared_photoId
+  // Tạo Document ID duy nhất: AlbumID + Scope + PhotoID
+  // Vì Scope mặc định là 'public_shared' nên mọi user đều ghi đè lên cùng 1 ID -> Dữ liệu dùng chung.
   const getDocId = (photoId: string) => {
       return `${albumId}_${sessionScope}_${photoId}`;
   };
@@ -324,29 +340,30 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     
     const newState = !photo.isFavorite;
     
-    // Optimistic UI Update (Cập nhật giao diện ngay lập tức)
+    // 1. Cập nhật UI ngay lập tức (Optimistic Update)
     const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
-    const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(photoStates);
-    tempMap.set(id, { ...currentState, isFavorite: newState });
+    const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean, updatedBy?: string}>(photoStates);
+    tempMap.set(id, { ...currentState, isFavorite: newState, updatedBy: user?.email || 'Bạn' });
     setPhotoStates(tempMap);
     syncToLocalStorage(tempMap);
 
+    // 2. Gửi lên Server
     const docRef = doc(db, "album_photo_states", getDocId(id));
+    setIsSyncing(true);
     
     try {
-        // Ghi lên Server
         await setDoc(docRef, {
             albumId: albumId,
             photoId: id,
-            ref: sessionScope, // Luôn lưu với scope hiện tại
+            ref: sessionScope, 
             isFavorite: newState,
             updatedAt: Timestamp.now(),
             updatedBy: user?.uid || 'anonymous',
-            updatedByEmail: user?.email || 'guest'
+            updatedByEmail: user?.email || (user?.isAnonymous ? 'Khách (Ẩn danh)' : 'Khách')
         }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu trạng thái tim:", e);
-        // Nếu lỗi, revert UI (tuỳ chọn, ở đây giữ đơn giản)
+        setIsSyncing(false);
     }
   };
 
@@ -361,14 +378,16 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     
     const newState = !photo.isSelected;
     
-    // Optimistic UI Update
+    // 1. Cập nhật UI ngay lập tức
     const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
-    const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean}>(photoStates);
-    tempMap.set(id, { ...currentState, isSelected: newState });
+    const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean, updatedBy?: string}>(photoStates);
+    tempMap.set(id, { ...currentState, isSelected: newState, updatedBy: user?.email || 'Bạn' });
     setPhotoStates(tempMap);
     syncToLocalStorage(tempMap);
 
+    // 2. Gửi lên Server
     const docRef = doc(db, "album_photo_states", getDocId(id));
+    setIsSyncing(true);
 
     try {
         await setDoc(docRef, {
@@ -378,10 +397,11 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
             isSelected: newState,
             updatedAt: Timestamp.now(),
             updatedBy: user?.uid || 'anonymous',
-            updatedByEmail: user?.email || 'guest'
+            updatedByEmail: user?.email || (user?.isAnonymous ? 'Khách (Ẩn danh)' : 'Khách')
         }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu trạng thái chọn:", e);
+        setIsSyncing(false);
     }
   };
 
@@ -503,13 +523,13 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
             )}
         </h1>
         
-        {/* THANH TRẠNG THÁI SCOPE */}
-        <div className="flex justify-center mt-2">
-            <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-[10px] md:text-xs font-medium border ${isPublicMode ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-purple-100 text-purple-800 border-purple-200'}`}>
+        {/* THANH TRẠNG THÁI SCOPE & SYNC */}
+        <div className="flex flex-col items-center justify-center mt-2 space-y-1">
+            <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-[10px] md:text-xs font-medium border shadow-sm transition-all ${isPublicMode ? 'bg-blue-50 text-blue-800 border-blue-200' : 'bg-purple-50 text-purple-800 border-purple-200'}`}>
                 {isPublicMode ? (
                     <>
-                        <Cloud className="w-3 h-3" />
-                        <span>Chế độ Công khai: Mọi người đều thấy lựa chọn của nhau</span>
+                        <Users className="w-3 h-3" />
+                        <span>Chế độ: <strong>Dùng Chung</strong> (Mọi người cùng thấy)</span>
                     </>
                 ) : (
                     <>
@@ -517,6 +537,18 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
                         <span>Chế độ Nhóm: {sessionScope}</span>
                     </>
                 )}
+            </div>
+
+            <div className="flex items-center space-x-2 text-[10px] text-green-100">
+                 {isSyncing ? (
+                     <span className="flex items-center animate-pulse text-yellow-300">
+                         <CloudLightning className="w-3 h-3 mr-1" /> Đang đồng bộ...
+                     </span>
+                 ) : (
+                     <span className="flex items-center opacity-80">
+                         <Cloud className="w-3 h-3 mr-1" /> Đã lưu {lastSyncTime ? `lúc ${lastSyncTime.toLocaleTimeString()}` : ''}
+                     </span>
+                 )}
             </div>
         </div>
 
@@ -571,6 +603,14 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
                         />
                         
                         <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                        
+                        {/* Hiển thị người cập nhật cuối cùng nếu có */}
+                        {photo.lastUpdatedBy && (photo.isSelected || photo.isFavorite) && (
+                            <div className="absolute bottom-1 left-1 z-20 bg-black/40 backdrop-blur-sm text-white text-[9px] px-1.5 py-0.5 rounded flex items-center">
+                                <Activity className="w-2.5 h-2.5 mr-1" />
+                                {photo.lastUpdatedBy.split('@')[0]}
+                            </div>
+                        )}
 
                         <button 
                             onClick={(e) => { e.stopPropagation(); toggleFavorite(photo.id); }}
