@@ -5,7 +5,7 @@ import { CreateAlbumForm } from './components/CreateAlbumForm';
 import { AlbumView } from './components/AlbumView';
 import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
   const [albumId, setAlbumId] = useState<string | null>(null);
@@ -47,34 +47,59 @@ const App: React.FC = () => {
     window.addEventListener('popstate', handleUrlChange);
     window.addEventListener('hashchange', handleUrlChange);
 
-    // 2. Firebase Auth Listener with Security Check
+    // 2. Firebase Auth Listener with Auto-Register & Ban Check
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const email = user.email || '';
         
-        // 2a. Nếu là Super Admin (Hardcoded) -> Cho phép
+        // 2a. Nếu là Super Admin (Hardcoded) -> Luôn Cho phép
         if (ADMIN_EMAILS.includes(email)) {
              setCurrentUser(user);
              return;
         }
 
-        // 2b. Nếu không phải Admin, kiểm tra trong Firestore (Allowlist)
+        // 2b. Kiểm tra Database
         try {
             const userDocRef = doc(db, 'allowed_users', email);
             const userDoc = await getDoc(userDocRef);
 
             if (userDoc.exists()) {
+                const userData = userDoc.data();
+                // NẾU BỊ ADMIN CHẶN (BANNED)
+                if (userData.banned === true) {
+                    await logoutUser();
+                    alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
+                    return;
+                }
+                
+                // Nếu không bị chặn, cập nhật thời gian đăng nhập cuối
+                await updateDoc(userDocRef, { 
+                    lastLogin: new Date(),
+                    photoURL: user.photoURL || '',
+                    displayName: user.displayName || ''
+                });
                 setCurrentUser(user);
             } else {
-                // Không có trong danh sách -> Kick out
-                await logoutUser();
-                alert(`Tài khoản "${email}" chưa được cấp quyền sử dụng hệ thống. Vui lòng liên hệ Admin.`);
+                // NGƯỜI DÙNG MỚI -> TỰ ĐỘNG ĐĂNG KÝ (AUTO-REGISTER)
+                await setDoc(userDocRef, { 
+                    email: email, 
+                    banned: false, // Mặc định cho phép
+                    createdAt: new Date(),
+                    lastLogin: new Date(),
+                    photoURL: user.photoURL || '',
+                    displayName: user.displayName || ''
+                });
+                setCurrentUser(user);
             }
         } catch (error) {
-            console.error("Lỗi kiểm tra quyền truy cập:", error);
-            // Fallback an toàn: Nếu lỗi DB, không cho đăng nhập để bảo mật
-            await logoutUser();
-            alert("Không thể kết nối đến hệ thống phân quyền. Vui lòng thử lại sau.");
+            console.error("Lỗi hệ thống người dùng:", error);
+            // Vẫn cho phép đăng nhập tạm thời nếu lỗi DB để không gián đoạn trải nghiệm (tuỳ chọn)
+            // Hoặc logout để an toàn:
+            // await logoutUser(); 
+            // alert("Lỗi kết nối server.");
+            
+            // Ở đây mình chọn cho phép user vào để tránh lỗi vặt làm phiền khách
+            setCurrentUser(user); 
         }
       } else {
         setCurrentUser(null);

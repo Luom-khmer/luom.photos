@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw, Shield, Users, Trash2, UserPlus } from 'lucide-react';
+import { Triangle, Key, Download, MessageSquare, List, Plus, Info, Loader2, CheckCircle, AlertCircle, FolderOpen, Settings, X, ExternalLink, HelpCircle, FileImage, Image as ImageIcon, Copy, Check, Share2, RefreshCw, Shield, Users, Trash2, UserPlus, History } from 'lucide-react';
 import { Switch } from './ui/Switch';
 import { User } from 'firebase/auth';
 import { db, ADMIN_EMAILS } from '../firebaseConfig';
-import { collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, onSnapshot, query, where } from 'firebase/firestore';
 
 interface CreateAlbumFormProps {
   user: User | null;
@@ -13,7 +13,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [driveLink, setDriveLink] = useState('');
   const [password, setPassword] = useState('');
   
-  // Logic xác định quyền Admin: Phải đăng nhập VÀ email nằm trong danh sách cho phép cố định
+  // Logic xác định quyền Admin
   const isAdmin = user && user.email && ADMIN_EMAILS.includes(user.email);
 
   // API Key State
@@ -29,7 +29,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const [showGuide, setShowGuide] = useState(false);
 
   // User Management State (Only for Admin)
-  const [allowedUsers, setAllowedUsers] = useState<{email: string, addedAt: any}[]>([]);
+  const [activeUsers, setActiveUsers] = useState<{email: string, lastLogin?: any, photoURL?: string}[]>([]);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [loadingUsers, setLoadingUsers] = useState(false);
 
@@ -63,19 +63,25 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
     }
   }, [apiKey]);
 
-  // Realtime Listener for Allowed Users (Only fetch if Admin and Settings Open)
+  // Realtime Listener for Users (Only fetch NOT BANNED users)
   useEffect(() => {
     if (isAdmin && showSettings) {
         setLoadingUsers(true);
+        // Chỉ lấy những user chưa bị banned
         const q = query(collection(db, "allowed_users"));
+        
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const users: any[] = [];
             snapshot.forEach((doc) => {
-                users.push(doc.data());
+                const data = doc.data();
+                // Filter client-side cho đơn giản (hoặc dùng where('banned', '!=', true) nếu đã đánh index)
+                if (data.banned !== true) {
+                    users.push(data);
+                }
             });
-            // Sort client side (optional) or use orderBy if index exists
-            users.sort((a, b) => (b.addedAt?.seconds || 0) - (a.addedAt?.seconds || 0));
-            setAllowedUsers(users);
+            // Sắp xếp theo lần đăng nhập cuối
+            users.sort((a, b) => (b.lastLogin?.seconds || 0) - (a.lastLogin?.seconds || 0));
+            setActiveUsers(users);
             setLoadingUsers(false);
         }, (error) => {
             console.error("Lỗi tải danh sách người dùng:", error);
@@ -85,7 +91,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
     }
   }, [isAdmin, showSettings]);
 
-  // Add User Logic
+  // Add/Unban User Logic
   const handleAddUser = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!newUserEmail || !newUserEmail.includes('@')) {
@@ -93,25 +99,33 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           return;
       }
       try {
+          // setDoc sẽ ghi đè hoặc tạo mới. Ta set banned = false để cho phép đăng nhập lại
           await setDoc(doc(db, "allowed_users", newUserEmail), {
               email: newUserEmail,
-              addedAt: new Date()
-          });
+              banned: false,
+              addedByAdminAt: new Date()
+          }, { merge: true }); // Merge để giữ lại các trường khác nếu có
+          
           setNewUserEmail('');
+          alert(`Đã cấp quyền truy cập cho ${newUserEmail}`);
       } catch (error) {
           console.error("Lỗi thêm user:", error);
-          alert("Không thể thêm người dùng. Kiểm tra kết nối Firestore.");
+          alert("Lỗi kết nối Firestore.");
       }
   };
 
-  // Remove User Logic
-  const handleRemoveUser = async (emailToRemove: string) => {
-      if (window.confirm(`Bạn có chắc muốn chặn quyền truy cập của ${emailToRemove}?`)) {
+  // Block/Ban User Logic (Thay vì deleteDoc, ta updateDoc banned=true)
+  const handleBlockUser = async (emailToBlock: string) => {
+      if (window.confirm(`Bạn muốn CHẶN quyền truy cập của ${emailToBlock}?\n\nNgười dùng này sẽ không thể đăng nhập nữa cho đến khi bạn thêm lại.`)) {
           try {
-              await deleteDoc(doc(db, "allowed_users", emailToRemove));
+              await updateDoc(doc(db, "allowed_users", emailToBlock), {
+                  banned: true,
+                  bannedAt: new Date()
+              });
+              // User sẽ biến mất khỏi danh sách Active vì ta filter banned !== true
           } catch (error) {
-              console.error("Lỗi xóa user:", error);
-              alert("Không thể xóa người dùng.");
+              console.error("Lỗi chặn user:", error);
+              alert("Không thể chặn người dùng này.");
           }
       }
   };
@@ -198,16 +212,9 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (status === 'success' && folderMetadata) {
-      // Safer URL generation using string manipulation to avoid Blob URL object issues
       const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://luomphotos.com';
-      
-      // Strip everything after ? or # to get clean base
       const baseUrl = currentUrl.split('?')[0].split('#')[0];
-      
-      // Construct Hash-based URL: baseUrl + #?album=ID
-      // This pattern is compatible with most static/blob hosting
       const finalUrl = `${baseUrl}#?album=${folderMetadata.id}`;
-      
       setCreatedLink(finalUrl);
     } else {
       if (status === 'error') {
@@ -398,51 +405,69 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                         </p>
                     </div>
 
-                    {/* SECTION 2: USER MANAGEMENT (ALLOWLIST) */}
+                    {/* SECTION 2: USER MANAGEMENT (ACTIVE USERS) */}
                     <div className="pt-2 border-t border-gray-200">
                         <label className="text-xs font-bold text-gray-600 uppercase flex items-center mb-2">
                             <Users className="w-3.5 h-3.5 mr-1" />
-                            Quản lý người dùng (Allowlist)
+                            Danh sách người dùng đã đăng nhập
                         </label>
                         <p className="text-[10px] text-gray-500 mb-3">
-                            Chỉ những email dưới đây mới được phép đăng nhập vào hệ thống. Xóa email để chặn quyền truy cập.
+                            Tất cả người dùng đăng nhập sẽ tự động hiện ở đây. Xóa email để CHẶN người đó truy cập.
                         </p>
 
-                        {/* Add User Form */}
+                        {/* Add/Unban User Form */}
                         <form onSubmit={handleAddUser} className="flex gap-2 mb-3">
                             <input 
                                 type="email" 
                                 value={newUserEmail}
                                 onChange={(e) => setNewUserEmail(e.target.value)}
-                                placeholder="Nhập email người dùng..." 
+                                placeholder="Thêm lại mail đã xóa (gỡ chặn)..." 
                                 className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 focus:ring-1 focus:ring-green-500 outline-none"
                             />
                             <button 
                                 type="submit"
-                                className="bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700 flex items-center"
+                                className="bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700 flex items-center whitespace-nowrap"
                                 disabled={!newUserEmail}
                             >
-                                <UserPlus className="w-3.5 h-3.5 mr-1" /> Thêm
+                                <UserPlus className="w-3.5 h-3.5 mr-1" /> Thêm/Gỡ chặn
                             </button>
                         </form>
 
                         {/* User List */}
-                        <div className="bg-white border border-gray-200 rounded max-h-40 overflow-y-auto custom-scrollbar">
+                        <div className="bg-white border border-gray-200 rounded max-h-48 overflow-y-auto custom-scrollbar">
                             {loadingUsers ? (
                                 <div className="p-3 text-center text-xs text-gray-400">Đang tải danh sách...</div>
-                            ) : allowedUsers.length === 0 ? (
-                                <div className="p-3 text-center text-xs text-gray-400">Chưa có người dùng nào được thêm.</div>
+                            ) : activeUsers.length === 0 ? (
+                                <div className="p-3 text-center text-xs text-gray-400">Chưa có người dùng nào đăng nhập.</div>
                             ) : (
                                 <ul className="divide-y divide-gray-100">
-                                    {allowedUsers.map((u) => (
-                                        <li key={u.email} className="px-3 py-2 flex justify-between items-center hover:bg-gray-50 text-sm">
-                                            <span className="text-gray-700 truncate mr-2">{u.email}</span>
+                                    {activeUsers.map((u) => (
+                                        <li key={u.email} className="px-3 py-2 flex justify-between items-center hover:bg-gray-50 text-sm group">
+                                            <div className="flex items-center overflow-hidden mr-2">
+                                                {/* Avatar (if available) */}
+                                                {u.photoURL ? (
+                                                    <img src={u.photoURL} alt="" className="w-6 h-6 rounded-full mr-2 border border-gray-200" />
+                                                ) : (
+                                                    <div className="w-6 h-6 rounded-full bg-green-100 text-green-600 flex items-center justify-center mr-2 text-xs font-bold">
+                                                        {u.email.charAt(0).toUpperCase()}
+                                                    </div>
+                                                )}
+                                                <div className="flex flex-col overflow-hidden">
+                                                    <span className="text-gray-700 truncate font-medium">{u.email}</span>
+                                                    {u.lastLogin && (
+                                                        <span className="text-[10px] text-gray-400 flex items-center">
+                                                            <History className="w-3 h-3 mr-0.5 inline" />
+                                                            {new Date(u.lastLogin.seconds * 1000).toLocaleString('vi-VN')}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
                                             <button 
-                                                onClick={() => handleRemoveUser(u.email)}
-                                                className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors"
-                                                title="Xóa quyền truy cập"
+                                                onClick={() => handleBlockUser(u.email)}
+                                                className="text-gray-300 hover:text-red-500 p-1.5 rounded hover:bg-red-50 transition-colors"
+                                                title="Xóa & Chặn truy cập"
                                             >
-                                                <Trash2 className="w-3.5 h-3.5" />
+                                                <Trash2 className="w-4 h-4" />
                                             </button>
                                         </li>
                                     ))}
