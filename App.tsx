@@ -51,55 +51,59 @@ const App: React.FC = () => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const email = user.email || '';
-        
-        // 2a. Nếu là Super Admin (Hardcoded) -> Luôn Cho phép
-        if (ADMIN_EMAILS.includes(email)) {
-             setCurrentUser(user);
-             return;
-        }
+        const userDocRef = doc(db, 'allowed_users', email);
 
-        // 2b. Kiểm tra Database
         try {
-            const userDocRef = doc(db, 'allowed_users', email);
+            // A. LOGIC LƯU TRỮ (Chạy cho TẤT CẢ user, kể cả Admin, để Admin thấy mình trong danh sách)
             const userDoc = await getDoc(userDocRef);
 
             if (userDoc.exists()) {
-                const userData = userDoc.data();
-                // NẾU BỊ ADMIN CHẶN (BANNED)
-                if (userData.banned === true) {
-                    await logoutUser();
-                    alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
-                    return;
-                }
-                
-                // Nếu không bị chặn, cập nhật thời gian đăng nhập cuối
+                // Cập nhật thời gian đăng nhập
                 await updateDoc(userDocRef, { 
                     lastLogin: new Date(),
                     photoURL: user.photoURL || '',
                     displayName: user.displayName || ''
                 });
-                setCurrentUser(user);
             } else {
-                // NGƯỜI DÙNG MỚI -> TỰ ĐỘNG ĐĂNG KÝ (AUTO-REGISTER)
+                // Tạo mới user
                 await setDoc(userDocRef, { 
                     email: email, 
-                    banned: false, // Mặc định cho phép
+                    banned: false,
                     createdAt: new Date(),
                     lastLogin: new Date(),
                     photoURL: user.photoURL || '',
                     displayName: user.displayName || ''
                 });
-                setCurrentUser(user);
             }
+
+            // B. LOGIC KIỂM TRA QUYỀN (Security Check)
+            
+            // 1. Nếu là Admin -> Luôn cho phép (Bypass banned check để Admin không tự khóa mình)
+            if (ADMIN_EMAILS.includes(email)) {
+                 setCurrentUser(user);
+                 return;
+            }
+
+            // 2. Nếu là User thường -> Kiểm tra xem có bị Ban không
+            if (userDoc.exists() && userDoc.data().banned === true) {
+                await logoutUser();
+                alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
+                return;
+            }
+            
+            // 3. Cho phép đăng nhập
+            setCurrentUser(user);
+
         } catch (error) {
             console.error("Lỗi hệ thống người dùng:", error);
-            // Vẫn cho phép đăng nhập tạm thời nếu lỗi DB để không gián đoạn trải nghiệm (tuỳ chọn)
-            // Hoặc logout để an toàn:
-            // await logoutUser(); 
-            // alert("Lỗi kết nối server.");
-            
-            // Ở đây mình chọn cho phép user vào để tránh lỗi vặt làm phiền khách
-            setCurrentUser(user); 
+            // Fallback: Nếu lỗi DB nhưng là Admin thì vẫn cho vào
+            if (ADMIN_EMAILS.includes(email)) {
+                setCurrentUser(user);
+            } else {
+                // Với user thường, nếu lỗi DB thì vẫn cho vào (để không gián đoạn) hoặc chặn tùy chính sách.
+                // Ở đây chọn cho vào.
+                setCurrentUser(user); 
+            }
         }
       } else {
         setCurrentUser(null);

@@ -74,7 +74,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             const users: any[] = [];
             snapshot.forEach((doc) => {
                 const data = doc.data();
-                // Filter client-side cho đơn giản (hoặc dùng where('banned', '!=', true) nếu đã đánh index)
+                // Filter client-side cho đơn giản
                 if (data.banned !== true) {
                     users.push(data);
                 }
@@ -99,12 +99,11 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           return;
       }
       try {
-          // setDoc sẽ ghi đè hoặc tạo mới. Ta set banned = false để cho phép đăng nhập lại
           await setDoc(doc(db, "allowed_users", newUserEmail), {
               email: newUserEmail,
               banned: false,
               addedByAdminAt: new Date()
-          }, { merge: true }); // Merge để giữ lại các trường khác nếu có
+          }, { merge: true });
           
           setNewUserEmail('');
           alert(`Đã cấp quyền truy cập cho ${newUserEmail}`);
@@ -114,15 +113,20 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
       }
   };
 
-  // Block/Ban User Logic (Thay vì deleteDoc, ta updateDoc banned=true)
+  // Block/Ban User Logic
   const handleBlockUser = async (emailToBlock: string) => {
-      if (window.confirm(`Bạn muốn CHẶN quyền truy cập của ${emailToBlock}?\n\nNgười dùng này sẽ không thể đăng nhập nữa cho đến khi bạn thêm lại.`)) {
+      // Không cho phép Admin tự xóa chính mình trong giao diện này để tránh lỗi
+      if (emailToBlock === user?.email) {
+          alert("Bạn không thể chặn chính mình!");
+          return;
+      }
+
+      if (window.confirm(`Bạn muốn CHẶN quyền truy cập của ${emailToBlock}?\n\nNgười dùng này sẽ không thể đăng nhập nữa.`)) {
           try {
               await updateDoc(doc(db, "allowed_users", emailToBlock), {
                   banned: true,
                   bannedAt: new Date()
               });
-              // User sẽ biến mất khỏi danh sách Active vì ta filter banned !== true
           } catch (error) {
               console.error("Lỗi chặn user:", error);
               alert("Không thể chặn người dùng này.");
@@ -347,10 +351,11 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
             {isAdmin && (
                 <button 
                     onClick={() => setShowSettings(!showSettings)}
-                    className="text-gray-400 hover:text-gray-700 transition-colors p-1"
-                    title="Cài đặt hệ thống (Admin)"
+                    className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-full transition-colors text-xs font-bold uppercase tracking-wider border border-gray-200 shadow-sm"
+                    title="Mở bảng điều khiển Admin"
                 >
-                    <Settings className={`w-5 h-5 ${!apiKey ? 'text-red-400 animate-pulse' : ''}`} />
+                    <Settings className={`w-4 h-4 ${!apiKey ? 'text-red-500 animate-pulse' : ''}`} />
+                    Quản Lý Admin
                 </button>
             )}
         </div>
@@ -412,7 +417,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                             Danh sách người dùng đã đăng nhập
                         </label>
                         <p className="text-[10px] text-gray-500 mb-3">
-                            Tất cả người dùng đăng nhập sẽ tự động hiện ở đây. Xóa email để CHẶN người đó truy cập.
+                            Tất cả người dùng (bao gồm Admin) đăng nhập sẽ tự động hiện ở đây. Xóa email để CHẶN người đó truy cập.
                         </p>
 
                         {/* Add/Unban User Form */}
@@ -442,7 +447,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                             ) : (
                                 <ul className="divide-y divide-gray-100">
                                     {activeUsers.map((u) => (
-                                        <li key={u.email} className="px-3 py-2 flex justify-between items-center hover:bg-gray-50 text-sm group">
+                                        <li key={u.email} className={`px-3 py-2 flex justify-between items-center hover:bg-gray-50 text-sm group ${u.email === user?.email ? 'bg-blue-50/50' : ''}`}>
                                             <div className="flex items-center overflow-hidden mr-2">
                                                 {/* Avatar (if available) */}
                                                 {u.photoURL ? (
@@ -453,7 +458,10 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                                                     </div>
                                                 )}
                                                 <div className="flex flex-col overflow-hidden">
-                                                    <span className="text-gray-700 truncate font-medium">{u.email}</span>
+                                                    <div className="flex items-center">
+                                                        <span className="text-gray-700 truncate font-medium">{u.email}</span>
+                                                        {u.email === user?.email && <span className="ml-2 text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded">Bạn</span>}
+                                                    </div>
                                                     {u.lastLogin && (
                                                         <span className="text-[10px] text-gray-400 flex items-center">
                                                             <History className="w-3 h-3 mr-0.5 inline" />
@@ -462,13 +470,17 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                                                     )}
                                                 </div>
                                             </div>
-                                            <button 
-                                                onClick={() => handleBlockUser(u.email)}
-                                                className="text-gray-300 hover:text-red-500 p-1.5 rounded hover:bg-red-50 transition-colors"
-                                                title="Xóa & Chặn truy cập"
-                                            >
-                                                <Trash2 className="w-4 h-4" />
-                                            </button>
+                                            
+                                            {/* Delete Button (Disable if it's the current admin user) */}
+                                            {u.email !== user?.email && (
+                                                <button 
+                                                    onClick={() => handleBlockUser(u.email)}
+                                                    className="text-gray-300 hover:text-red-500 p-1.5 rounded hover:bg-red-50 transition-colors"
+                                                    title="Xóa & Chặn truy cập"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            )}
                                         </li>
                                     ))}
                                 </ul>
