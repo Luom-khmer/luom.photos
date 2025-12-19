@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon, Users, Cloud, CloudLightning, Activity, Globe, Save } from 'lucide-react';
+import { Heart, Download, Check, FileSpreadsheet, Copy, X, AlertTriangle, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, MessageCircle, Send, User as UserIcon, Grid, Image as ImageIcon, Users, Cloud, CloudLightning, Activity, Globe, Save, FileText, RefreshCw, List } from 'lucide-react';
 import { collection, addDoc, query, where, orderBy, onSnapshot, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../firebaseConfig';
 import { User } from 'firebase/auth';
@@ -45,6 +45,10 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   
+  // State cho Modal xem danh sách
+  const [showSelectionList, setShowSelectionList] = useState(false);
+  const [isCopyingList, setIsCopyingList] = useState(false);
+  
   const [lightboxIndex, setLightboxIndex] = useState<number>(-1);
   const [isZoomed, setIsZoomed] = useState(false);
   const filmstripRef = useRef<HTMLDivElement>(null);
@@ -59,13 +63,12 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
 
   // --- LOGIC MỚI: GLOBAL ONLY ---
   // Sử dụng collection mới: 'global_photo_selection'
-  // Bỏ qua logic 'ref' phức tạp, mặc định mọi thứ là PUBLIC SHARED nếu không có ref đặc biệt.
-  const isPublicMode = true; 
-
-  // LocalStorage Key cho phiên bản mới
+  // ID Session chính là albumId. Mọi người vào cùng albumId sẽ thấy cùng dữ liệu.
+  
+  // LocalStorage Key (Chỉ dùng để cache hiển thị tức thì)
   const LOCAL_STORAGE_KEY = `luom_global_state_v3_${albumId}`;
 
-  // 1. Load LocalStorage (Chỉ để hiển thị NGAY LẬP TỨC khi mới vào, sẽ bị Firestore ghi đè ngay sau đó)
+  // 1. Load LocalStorage (Cache ban đầu)
   useEffect(() => {
       try {
           const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -118,9 +121,16 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   const selectedCount = useMemo(() => photos.filter(p => p.isSelected).length, [photos]);
   const favoriteCount = useMemo(() => photos.filter(p => p.isFavorite).length, [photos]);
 
+  // Lấy danh sách tên file đã chọn (cho Modal)
+  const selectedFileNames = useMemo(() => {
+      return photos
+          .filter(p => p.isSelected)
+          .map((p, index) => `${index + 1}. ${p.name}`)
+          .join('\n');
+  }, [photos]);
+
   // 2. Fetch from Drive
-  useEffect(() => {
-    const fetchPhotos = async () => {
+  const fetchPhotosFromDrive = async () => {
       setLoading(true);
       setError(null);
       setDrivePhotos([]);
@@ -198,8 +208,9 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
       }
     };
 
+  useEffect(() => {
     if (albumId && albumId.length > 5) {
-        fetchPhotos();
+        fetchPhotosFromDrive();
     } else {
         setLoading(false);
         setError("ID Album không hợp lệ.");
@@ -212,8 +223,7 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
 
       setIsSyncing(true);
       
-      // Sử dụng collection "global_photo_selection" để tách biệt hoàn toàn với hệ thống cũ
-      // Query chỉ dựa vào AlbumId, không quan tâm user
+      // Query lắng nghe thay đổi của Album này
       const q = query(
           collection(db, "global_photo_selection"), 
           where("albumId", "==", albumId)
@@ -223,10 +233,8 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
           setIsSyncing(false);
           setLastSyncTime(new Date());
 
-          // QUAN TRỌNG: Tạo Map MỚI HOÀN TOÀN từ snapshot.
-          // Không dùng 'prev' để merge, vì 'prev' có thể chứa dữ liệu rác từ localStorage.
-          // Snapshot luôn đúng (Source of Truth).
-          // Firestore tự động xử lý 'pending writes' (thao tác chưa gửi lên server) nên local vẫn mượt.
+          // Tạo Map mới hoàn toàn từ Server -> Source of Truth
+          // Bỏ qua cache cũ để đảm bảo không bị "ảo"
           const nextMap = new Map<string, {isSelected: boolean, isFavorite: boolean, updatedBy?: string}>();
           
           snapshot.forEach((doc) => {
@@ -245,7 +253,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
       }, (error) => {
           console.error("Lỗi đồng bộ Firestore:", error);
           setIsSyncing(false);
-          // Có thể hiện thông báo lỗi nhẹ ở UI nếu cần
       });
 
       return () => unsubscribe();
@@ -322,9 +329,9 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
   }, [lightboxIndex]);
 
   // --- HÀM LƯU DỮ LIỆU ---
-  // ID Cố định: Global + AlbumID + PhotoID.
-  // Đảm bảo mọi người ghi đè lên cùng 1 tài liệu.
   const getDocId = (photoId: string) => {
+      // ID Document = Global + AlbumID + PhotoID
+      // Đảm bảo tính duy nhất và chia sẻ toàn cục cho album này
       return `global_${albumId}_${photoId}`;
   };
 
@@ -342,14 +349,12 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     const newState = !photo.isFavorite;
     const userName = getUserDisplayName();
 
-    // Optimistic Update (Cập nhật giao diện ngay lập tức)
-    // Lưu ý: State này sẽ sớm được Snapshot cập nhật lại, đảm bảo tính nhất quán
+    // Optimistic Update
     const currentState = photoStates.get(id) || { isSelected: false, isFavorite: false };
     const tempMap = new Map<string, {isSelected: boolean, isFavorite: boolean, updatedBy?: string}>(photoStates);
     tempMap.set(id, { ...currentState, isFavorite: newState, updatedBy: userName });
     setPhotoStates(tempMap);
     
-    // Set syncing state
     setIsSyncing(true);
 
     const docRef = doc(db, "global_photo_selection", getDocId(id));
@@ -389,7 +394,6 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
     
     setIsSyncing(true);
 
-    // GHI ĐÈ LÊN DOCUMENT CHUNG
     const docRef = doc(db, "global_photo_selection", getDocId(id));
 
     try {
@@ -420,21 +424,24 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
       document.body.removeChild(link);
   };
 
-  const handleCopySelectedNames = () => {
-      const selected = photos.filter(p => p.isSelected);
-      if (selected.length === 0) {
-          alert("Chưa có ảnh nào được chọn! Vui lòng chọn ảnh trước khi sao chép.");
+  // Mở modal danh sách thay vì copy ngay
+  const handleOpenSelectionList = () => {
+      if (selectedCount === 0) {
+          alert("Chưa có ảnh nào được chọn!");
           return;
       }
-      const text = selected.map(p => p.name).join('\n');
-      navigator.clipboard.writeText(text).then(() => {
-          alert(`Đã sao chép ${selected.length} tên file vào bộ nhớ tạm!`);
-      }).catch(err => {
-          console.error('Không thể sao chép:', err);
-          alert('Lỗi: Không thể sao chép vào bộ nhớ tạm.');
-      });
+      setShowSelectionList(true);
   };
   
+  const handleCopyListText = () => {
+      navigator.clipboard.writeText(selectedFileNames).then(() => {
+          setIsCopyingList(true);
+          setTimeout(() => setIsCopyingList(false), 2000);
+      }).catch(err => {
+          alert('Không thể sao chép vào bộ nhớ tạm.');
+      });
+  };
+
   const toggleZoom = (e?: React.MouseEvent) => {
       e?.stopPropagation();
       setIsZoomed(!isZoomed);
@@ -515,8 +522,61 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
 
   return (
     <div className="bg-white rounded-md shadow-2xl overflow-hidden min-h-screen pb-20 border border-gray-200">
+      
+      {/* MODAL XEM DANH SÁCH ĐÃ CHỌN */}
+      {showSelectionList && (
+        <div className="fixed inset-0 z-[120] bg-black/80 flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowSelectionList(false)}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+                    <div className="flex items-center gap-2">
+                        <List className="w-5 h-5 text-green-600" />
+                        <h3 className="font-bold text-gray-800">Danh sách đã chọn ({selectedCount})</h3>
+                    </div>
+                    <button onClick={() => setShowSelectionList(false)} className="text-gray-400 hover:text-gray-600 p-1">
+                        <X className="w-6 h-6" />
+                    </button>
+                </div>
+                
+                <div className="flex-1 p-0 overflow-hidden relative group">
+                    <textarea 
+                        readOnly 
+                        value={selectedFileNames} 
+                        className="w-full h-full p-4 border-none resize-none focus:ring-0 text-sm font-mono text-gray-700 leading-relaxed bg-white"
+                        style={{ minHeight: '300px' }}
+                    />
+                </div>
+                
+                <div className="p-4 border-t border-gray-200 bg-gray-50 flex gap-3">
+                    <button 
+                        onClick={handleCopyListText}
+                        className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-bold text-white transition-all ${isCopyingList ? 'bg-green-700 scale-95' : 'bg-green-600 hover:bg-green-700 hover:scale-[1.02] shadow-lg'}`}
+                    >
+                        {isCopyingList ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+                        {isCopyingList ? 'Đã Sao Chép!' : 'Sao Chép Toàn Bộ'}
+                    </button>
+                    <button 
+                        onClick={() => setShowSelectionList(false)}
+                        className="px-6 py-3 rounded-lg font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-100"
+                    >
+                        Đóng
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
       <div className="bg-[#2e7d32] text-white py-3 px-4 md:px-6 shadow-md relative z-20 border-b-4 border-[#1b5e20]">
-        <h1 className="text-lg md:text-2xl font-medium tracking-wide uppercase shadow-black drop-shadow-md text-center">
+        <div className="flex justify-between items-start absolute top-3 right-3 z-30">
+             <button 
+                onClick={fetchPhotosFromDrive} 
+                className="p-1.5 bg-green-800/50 hover:bg-green-700 rounded-full text-green-100 transition-colors"
+                title="Làm mới dữ liệu"
+             >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+             </button>
+        </div>
+
+        <h1 className="text-lg md:text-2xl font-medium tracking-wide uppercase shadow-black drop-shadow-md text-center pr-8 pl-8">
             {albumName} ({photos.length} ảnh)
             {maxSelection !== null && (
                 <span className="block text-xs md:text-sm font-normal text-yellow-300 mt-1 bg-black/20 rounded-full py-0.5 px-3 w-fit mx-auto">
@@ -870,11 +930,11 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, albumRef, user })
              </button>
 
              <button 
-                onClick={handleCopySelectedNames}
+                onClick={handleOpenSelectionList}
                 className="w-10 h-10 md:w-11 md:h-11 bg-[#2979FF] text-white rounded-full shadow-xl flex items-center justify-center hover:bg-[#2962FF] transition-transform hover:scale-110"
-                title="Sao chép tên file"
+                title="Xem & Sao chép danh sách"
              >
-                <Copy className="w-5 h-5 md:w-6 md:h-6" />
+                <FileText className="w-5 h-5 md:w-6 md:h-6" />
              </button>
 
              <div className="pt-1">
