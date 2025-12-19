@@ -4,7 +4,7 @@ import { Footer } from './components/Footer';
 import { CreateAlbumForm } from './components/CreateAlbumForm';
 import { AlbumView } from './components/AlbumView';
 import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
-import { onAuthStateChanged, User, signInAnonymously } from 'firebase/auth';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
@@ -96,19 +96,9 @@ const App: React.FC = () => {
             }
         }
       } else {
-        // Nếu không có user (khách truy cập), thử đăng nhập ẩn danh để có quyền ghi Firestore
-        // Điều này giúp khách vẫn có thể Tim/Chọn ảnh nếu Rules yêu cầu "auth != null"
-        try {
-            await signInAnonymously(auth);
-        } catch (error: any) {
-            // Fix lỗi "auth/admin-restricted-operation": Xảy ra khi chưa bật Anonymous Provider trong Console
-            if (error.code === 'auth/admin-restricted-operation') {
-                console.warn("⚠️ Warning: Tính năng đăng nhập ẩn danh chưa được bật trong Firebase Console.");
-            } else {
-                console.error("Lỗi đăng nhập ẩn danh cho khách:", error);
-            }
-            setCurrentUser(null);
-        }
+        // Người dùng chưa đăng nhập (Khách)
+        // Đã xóa logic đăng nhập ẩn danh theo yêu cầu
+        setCurrentUser(null);
       }
     });
 
