@@ -266,6 +266,10 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           finalUrl += `&comments=1`;
       }
       
+      // Thêm tham số ngẫu nhiên để link luôn khác nhau (tránh trùng lặp)
+      const uniqueId = Math.random().toString(36).substring(2, 7);
+      finalUrl += `&ref=${uniqueId}`;
+
       // 2. CẬP NHẬT SỐ LƯỢT CỦA KHÁCH
       if (!user) {
           const newCount = (parseInt(localStorage.getItem('guest_album_count') || '0', 10) + 1);
