@@ -86,8 +86,18 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                     users.push(data);
                 }
             });
+            
             // Sắp xếp theo lần đăng nhập cuối
-            users.sort((a, b) => (b.lastLogin?.seconds || 0) - (a.lastLogin?.seconds || 0));
+            // Helper để lấy miliseconds từ cả Timestamp (Firestore) và Date (JS)
+            const getTime = (t: any) => {
+                if (!t) return 0;
+                if (t.seconds) return t.seconds * 1000; // Firestore Timestamp
+                if (typeof t.getTime === 'function') return t.getTime(); // JS Date object
+                return 0;
+            };
+
+            users.sort((a, b) => getTime(b.lastLogin) - getTime(a.lastLogin));
+            
             setActiveUsers(users);
             setLoadingUsers(false);
         }, (error) => {
@@ -502,7 +512,11 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
                                                     {u.lastLogin && (
                                                         <span className="text-[10px] text-gray-400 flex items-center">
                                                             <History className="w-3 h-3 mr-0.5 inline" />
-                                                            {new Date(u.lastLogin.seconds * 1000).toLocaleString('vi-VN')}
+                                                            {/* Check if lastLogin is Timestamp or Date */}
+                                                            {u.lastLogin.seconds 
+                                                                ? new Date(u.lastLogin.seconds * 1000).toLocaleString('vi-VN') 
+                                                                : new Date(u.lastLogin).toLocaleString('vi-VN')
+                                                            }
                                                         </span>
                                                     )}
                                                 </div>

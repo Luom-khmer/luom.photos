@@ -50,22 +50,33 @@ const App: React.FC = () => {
     // 2. Firebase Auth Listener with Auto-Register & Ban Check
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        // CẬP NHẬT UI NGAY LẬP TỨC ĐỂ TRÁNH ĐỘ TRỄ
+        setCurrentUser(user);
+
         const email = user.email || '';
         const userDocRef = doc(db, 'allowed_users', email);
 
+        // XỬ LÝ DATABASE DƯỚI NỀN (BACKGROUND)
         try {
-            // A. LOGIC LƯU TRỮ (Chạy cho TẤT CẢ user, kể cả Admin, để Admin thấy mình trong danh sách)
             const userDoc = await getDoc(userDocRef);
+            
+            // Logic kiểm tra BAN (Chặn)
+            // Nếu bị ban và không phải Admin -> Logout ngược lại
+            if (!ADMIN_EMAILS.includes(email) && userDoc.exists() && userDoc.data().banned === true) {
+                await logoutUser();
+                setCurrentUser(null); // Cập nhật lại UI sau khi logout
+                alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
+                return;
+            }
 
+            // Logic Lưu/Cập nhật User vào DB
             if (userDoc.exists()) {
-                // Cập nhật thời gian đăng nhập
                 await updateDoc(userDocRef, { 
                     lastLogin: new Date(),
                     photoURL: user.photoURL || '',
                     displayName: user.displayName || ''
                 });
             } else {
-                // Tạo mới user
                 await setDoc(userDocRef, { 
                     email: email, 
                     banned: false,
@@ -76,34 +87,9 @@ const App: React.FC = () => {
                 });
             }
 
-            // B. LOGIC KIỂM TRA QUYỀN (Security Check)
-            
-            // 1. Nếu là Admin -> Luôn cho phép (Bypass banned check để Admin không tự khóa mình)
-            if (ADMIN_EMAILS.includes(email)) {
-                 setCurrentUser(user);
-                 return;
-            }
-
-            // 2. Nếu là User thường -> Kiểm tra xem có bị Ban không
-            if (userDoc.exists() && userDoc.data().banned === true) {
-                await logoutUser();
-                alert(`Tài khoản "${email}" đã bị Admin chặn quyền truy cập.`);
-                return;
-            }
-            
-            // 3. Cho phép đăng nhập
-            setCurrentUser(user);
-
         } catch (error) {
-            console.error("Lỗi hệ thống người dùng:", error);
-            // Fallback: Nếu lỗi DB nhưng là Admin thì vẫn cho vào
-            if (ADMIN_EMAILS.includes(email)) {
-                setCurrentUser(user);
-            } else {
-                // Với user thường, nếu lỗi DB thì vẫn cho vào (để không gián đoạn) hoặc chặn tùy chính sách.
-                // Ở đây chọn cho vào.
-                setCurrentUser(user); 
-            }
+            console.error("Lỗi đồng bộ dữ liệu người dùng:", error);
+            // Nếu lỗi DB nhưng user đã đăng nhập auth thành công, ta vẫn giữ trạng thái đăng nhập ở UI (đã set ở trên)
         }
       } else {
         setCurrentUser(null);
