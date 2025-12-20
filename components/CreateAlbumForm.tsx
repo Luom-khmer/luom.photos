@@ -143,13 +143,14 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   };
 
   const checkDriveLink = async (url: string) => {
-    const driveRegex = /(?:https?:\/\/)?(?:drive|docs)\.google\.com\/(?:drive\/folders\/|open\?id=)([-\w]+)/;
+    // Regex linh hoạt hơn: bắt bất kỳ chuỗi nào sau folders/ hoặc id=
+    const driveRegex = /(?:folders\/|id=)([-\w]+)/;
     const match = url.match(driveRegex);
 
     if (!match || !match[1]) {
         if (url.length > 10) {
             setStatus('error');
-            setErrorMessage('Đường dẫn không đúng định dạng Google Drive.');
+            setErrorMessage('Đường dẫn không đúng định dạng Google Drive (cần chứa ID thư mục).');
             setFolderMetadata(null);
         } else {
             setStatus('idle');
@@ -222,7 +223,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   }, [driveLink]);
 
   const generateSessionId = () => {
-      // Tạo ID ngẫu nhiên gồm chữ hoa, thường và số (8 ký tự) giống ví dụ EV8wrSFIok
+      // Tạo ID ngẫu nhiên gồm chữ hoa, thường và số (8 ký tự)
       const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'; 
       let result = '';
       for (let i = 0; i < 8; i++) {
@@ -240,7 +241,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
       const sessionId = generateSessionId();
       
       try {
-          // Timeout race để tránh treo (Tăng lên 20s cho chắc chắn)
+          // Timeout race để tránh treo (20s)
           const savePromise = setDoc(doc(db, "sessions", sessionId), {
               sessionId: sessionId,
               driveFolderId: folderMetadata.id,
