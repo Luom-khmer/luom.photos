@@ -395,23 +395,16 @@ export const AlbumView: React.FC<AlbumViewProps> = ({ albumId, user }) => {
 
     try {
         // Lưu vào bảng 'selections'
-        // Logic: sessionId + fileId (duy nhất)
         const docRef = doc(db, "selections", getDocId(id));
-        
-        // PAYLOAD API: Tuân thủ nghiêm ngặt yêu cầu backend
-        const payload = {
-            sessionId: albumId,     
-            fileId: id,             
-            fileName: photo.name,   
-            selected: newState, // TRUE/FALSE
-            selectedAt: newState ? now : null, // Timestamp
-            
-            // Các field phụ trợ (Audit)
-            updatedAt: now,
+        await setDoc(docRef, {
+            sessionId: albumId, 
+            fileId: id,
+            fileName: photo.name,
+            isSelected: newState,
+            selectedAt: newState ? now : null,
+            updatedAt: new Date(), // Dùng new Date() thay vì Timestamp
             updatedByName: userName
-        };
-
-        await setDoc(docRef, payload, { merge: true });
+        }, { merge: true });
     } catch (e: any) {
         console.error("Lỗi lưu chọn:", e);
         const revertMap = new Map(photoStates);
