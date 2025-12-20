@@ -143,7 +143,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   };
 
   const checkDriveLink = async (url: string) => {
-    // Regex linh hoạt hơn: bắt bất kỳ chuỗi nào sau folders/ hoặc id=
+    // Regex linh hoạt: bắt ID sau 'folders/' hoặc 'id='
     const driveRegex = /(?:folders\/|id=)([-\w]+)/;
     const match = url.match(driveRegex);
 
@@ -223,7 +223,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   }, [driveLink]);
 
   const generateSessionId = () => {
-      // Tạo ID ngẫu nhiên gồm chữ hoa, thường và số (8 ký tự)
       const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'; 
       let result = '';
       for (let i = 0; i < 8; i++) {
@@ -241,8 +240,8 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
       const sessionId = generateSessionId();
       
       try {
-          // Timeout race để tránh treo (20s)
-          const savePromise = setDoc(doc(db, "sessions", sessionId), {
+          // Ghi trực tiếp vào Firestore không qua timeout wrapper để thấy lỗi thật
+          await setDoc(doc(db, "sessions", sessionId), {
               sessionId: sessionId,
               driveFolderId: folderMetadata.id,
               albumName: folderMetadata.name,
@@ -257,11 +256,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
               }
           });
 
-          await Promise.race([
-              savePromise,
-              new Promise((_, reject) => setTimeout(() => reject(new Error("Firebase Timeout")), 20000))
-          ]);
-
           // TẠO LINK DẠNG PATH: /album/ID
           const origin = typeof window !== 'undefined' ? window.location.origin : 'https://luomphotos.com';
           const cleanOrigin = origin.endsWith('/') ? origin.slice(0, -1) : origin;
@@ -272,11 +266,7 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
           setCreatedLink(finalUrl);
       } catch (error: any) {
           console.error("Lỗi tạo phiên:", error);
-          if (error.message === 'Firebase Timeout') {
-              alert("Lỗi: Kết nối tới máy chủ quá lâu (Timeout). Vui lòng kiểm tra mạng của bạn.");
-          } else {
-              alert(`Lỗi không thể tạo Album: ${error.message}\nKiểm tra lại kết nối hoặc thử đăng nhập lại.`);
-          }
+          alert(`Lỗi không thể tạo Album: ${error.message}\n\nVui lòng kiểm tra:\n1. Kết nối mạng.\n2. Quyền truy cập Database (Firestore Rules).`);
       } finally {
           setIsCreating(false);
       }
