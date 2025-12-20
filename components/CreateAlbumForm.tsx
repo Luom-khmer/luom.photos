@@ -143,7 +143,6 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
   };
 
   const checkDriveLink = async (url: string) => {
-    // Regex linh hoạt: bắt ID sau 'folders/' hoặc 'id='
     const driveRegex = /(?:folders\/|id=)([-\w]+)/;
     const match = url.match(driveRegex);
 
@@ -238,9 +237,12 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
       setIsCreating(true);
       
       const sessionId = generateSessionId();
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'https://luomphotos.com';
+      const cleanOrigin = origin.endsWith('/') ? origin.slice(0, -1) : origin;
       
       try {
-          // Ghi trực tiếp vào Firestore không qua timeout wrapper để thấy lỗi thật
+          // BẮT BUỘC GHI VÀO DATABASE
+          // Nếu bước này lỗi, sẽ nhảy xuống catch và báo lỗi cho người dùng.
           await setDoc(doc(db, "sessions", sessionId), {
               sessionId: sessionId,
               driveFolderId: folderMetadata.id,
@@ -256,17 +258,23 @@ export const CreateAlbumForm: React.FC<CreateAlbumFormProps> = ({ user }) => {
               }
           });
 
-          // TẠO LINK DẠNG PATH: /album/ID
-          const origin = typeof window !== 'undefined' ? window.location.origin : 'https://luomphotos.com';
-          const cleanOrigin = origin.endsWith('/') ? origin.slice(0, -1) : origin;
-          
-          const finalUrl = `${cleanOrigin}/album/${sessionId}`;
-          
+          // Chỉ khi ghi thành công mới tạo link
           setCreatedSessionId(sessionId);
-          setCreatedLink(finalUrl);
+          setCreatedLink(`${cleanOrigin}/album/${sessionId}`);
       } catch (error: any) {
           console.error("Lỗi tạo phiên:", error);
-          alert(`Lỗi không thể tạo Album: ${error.message}\n\nVui lòng kiểm tra:\n1. Kết nối mạng.\n2. Quyền truy cập Database (Firestore Rules).`);
+          
+          let friendlyError = "Không thể lưu vào Database.";
+          if (error.code === 'permission-denied') {
+              friendlyError = "LỖI QUYỀN TRUY CẬP (Permission Denied): Bạn không có quyền ghi vào Database. Vui lòng kiểm tra Firestore Security Rules.";
+          } else if (error.code === 'unavailable') {
+              friendlyError = "MẤT KẾT NỐI: Không thể kết nối đến máy chủ Firestore. Vui lòng kiểm tra mạng.";
+          } else {
+              friendlyError = `LỖI: ${error.message}`;
+          }
+
+          alert(`KHÔNG THỂ TẠO ALBUM!\n\n${friendlyError}`);
+          // Không fallback, giữ nguyên trạng thái để người dùng thử lại
       } finally {
           setIsCreating(false);
       }
