@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { CreateAlbumForm } from './components/CreateAlbumForm';
 import { AlbumView } from './components/AlbumView';
+import { UserManagement } from './components/UserManagement';
 import { auth, db, loginWithGoogle, logoutUser, ADMIN_EMAILS } from './firebaseConfig';
 import { onAuthStateChanged, User, signInAnonymously } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
@@ -12,6 +13,7 @@ const App: React.FC = () => {
   const [albumId, setAlbumId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [showAdminDashboard, setShowAdminDashboard] = useState(false);
 
   useEffect(() => {
     // Logic URL mới: Hỗ trợ cả /album/ID và ?session=ID
@@ -34,6 +36,8 @@ const App: React.FC = () => {
 
     const handlePopState = () => {
         setAlbumId(getSessionId());
+        // Nếu user back lại, có thể cần tắt admin dashboard
+        setShowAdminDashboard(false);
     };
     window.addEventListener('popstate', handlePopState);
 
@@ -88,6 +92,15 @@ const App: React.FC = () => {
 
   const handleLogout = async () => {
     await logoutUser();
+    setShowAdminDashboard(false); // Reset dashboard khi logout
+  };
+
+  const handleAdminClick = () => {
+      setShowAdminDashboard(prev => !prev);
+      if (!showAdminDashboard) {
+          // Khi bật admin dashboard, có thể muốn clear albumId tạm thời về mặt hiển thị
+          // Nhưng logic routing URL vẫn giữ nguyên để khi tắt dashboard thì về đúng chỗ
+      }
   };
 
   if (!isAuthReady) {
@@ -99,15 +112,27 @@ const App: React.FC = () => {
       );
   }
 
+  // Logic Render: Admin Dashboard > Album View > Create Form
+  let content;
+  if (showAdminDashboard) {
+      content = <UserManagement currentUser={currentUser} />;
+  } else if (albumId) {
+      content = <AlbumView albumId={albumId} albumRef={null} user={currentUser} />;
+  } else {
+      content = <CreateAlbumForm user={currentUser} />;
+  }
+
   return (
     <div className="flex flex-col min-h-screen bg-gray-50 font-sans text-gray-900">
-      <Header user={currentUser} onLogin={handleLogin} onLogout={handleLogout} />
+      <Header 
+        user={currentUser} 
+        onLogin={handleLogin} 
+        onLogout={handleLogout} 
+        onAdminClick={handleAdminClick}
+        showAdminDashboard={showAdminDashboard}
+      />
       <main className="flex-grow container mx-auto px-4 py-8 flex flex-col items-center">
-        {albumId ? (
-          <AlbumView albumId={albumId} albumRef={null} user={currentUser} />
-        ) : (
-          <CreateAlbumForm user={currentUser} />
-        )}
+        {content}
       </main>
       <Footer />
     </div>

@@ -1,23 +1,31 @@
 import React from 'react';
-import { Home, LogIn, Copy, Globe, LogOut, User as UserIcon, Facebook } from 'lucide-react';
+import { Home, LogIn, Copy, Globe, LogOut, User as UserIcon, Facebook, Users, Shield } from 'lucide-react';
 import { User } from 'firebase/auth';
+import { ADMIN_EMAILS } from '../firebaseConfig';
 
 interface HeaderProps {
   user: User | null;
   onLogin: () => void;
   onLogout: () => void;
+  onAdminClick: () => void;
+  showAdminDashboard: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
+export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout, onAdminClick, showAdminDashboard }) => {
   const handleHomeClick = (e: React.MouseEvent) => {
     e.preventDefault();
-    window.history.pushState({}, '', window.location.pathname);
-    window.dispatchEvent(new PopStateEvent('popstate'));
+    if (showAdminDashboard) {
+       onAdminClick(); // Nếu đang ở admin thì click home sẽ tắt admin dashboard
+    } else {
+       // Logic reset về home bình thường
+       window.history.pushState({}, '', window.location.pathname.split('/')[0]); // Reset về root nếu cần
+       window.location.href = "/"; // Đơn giản nhất là reload về trang chủ
+    }
   };
 
   // Logic kiểm tra hiển thị: Chỉ hiện thông tin user nếu KHÔNG PHẢI là ẩn danh
-  // Nếu là ẩn danh (Khách), biến này sẽ false -> Hiển thị nút Đăng nhập như bình thường
   const isRealUser = user && !user.isAnonymous;
+  const isAdmin = isRealUser && user.email && ADMIN_EMAILS.includes(user.email);
 
   return (
     <header className="bg-[#1b5e20] text-white py-3 px-4 shadow-md z-20">
@@ -25,7 +33,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
         
         {/* Logo Section */}
         <div className="flex items-center space-x-2">
-          <div className="flex flex-col cursor-pointer" onClick={handleHomeClick}>
+          <div className="flex flex-col cursor-pointer" onClick={() => window.location.href = "/"}>
             <h1 className="text-2xl font-bold tracking-tight text-yellow-400 drop-shadow-sm flex items-center">
               <img 
                 src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=100&h=100" 
@@ -44,13 +52,29 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
             <li>
               <a 
                 href="/" 
-                onClick={handleHomeClick}
                 className="flex items-center hover:text-yellow-300 transition-colors"
               >
                 <Home className="w-4 h-4 mr-1" />
                 Trang Chủ
               </a>
             </li>
+
+            {/* Admin Tab Button */}
+            {isAdmin && (
+                <li>
+                    <button
+                        onClick={onAdminClick}
+                        className={`flex items-center transition-all px-3 py-1 rounded-full border ${
+                            showAdminDashboard 
+                            ? 'bg-yellow-400 text-green-900 border-yellow-500 font-bold shadow-lg' 
+                            : 'bg-green-700/50 hover:bg-green-600 border-green-600 text-yellow-100'
+                        }`}
+                    >
+                        <Shield className="w-4 h-4 mr-1.5" />
+                        Quản Lý User
+                    </button>
+                </li>
+            )}
             
             {/* User Login/Logout Logic */}
             {isRealUser ? (
@@ -74,9 +98,6 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
                 </button>
               </li>
             ) : (
-              // Trạng thái: Chưa đăng nhập hoặc Đang là Khách (Ẩn danh)
-              // Hiển thị nút Đăng Nhập bình thường để Admin có thể login
-              // Khách hàng sẽ thấy nút này như trang web bình thường, nhưng hệ thống bên dưới vẫn đang chạy ngầm
               <li>
                  <button 
                   onClick={onLogin} 
@@ -93,17 +114,6 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogin, onLogout }) => {
               <a href="#" className="flex items-center hover:text-yellow-300 transition-colors">
                 <Copy className="w-4 h-4 mr-1" />
                 Sao Chép Ảnh
-              </a>
-            </li>
-            <li>
-              <a 
-                href="https://www.facebook.com/luom68g1" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="flex items-center hover:text-yellow-300 transition-colors"
-              >
-                <Facebook className="w-4 h-4 mr-1" />
-                Liên Hệ
               </a>
             </li>
             <li className="flex items-center">
